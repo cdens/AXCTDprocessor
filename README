@@ -1,0 +1,7 @@
+This software was developed to enable reprocessing AXCTD audio (WAV) files via command line. It is currently still under development.
+
+TODO:
+1. Identify FSK demodulation bit errors and improve system
+2. Improve bitstream frame parsing algorithm
+3. Add command line argument capabilities (e.g. python3 AXCTDprocessor -i inputfile.wav -o outputfile.txt)
+
