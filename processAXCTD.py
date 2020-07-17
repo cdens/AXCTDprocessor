@@ -26,6 +26,10 @@
 #                                    IMPORTS                                      #
 ###################################################################################
 
+import argparse
+import logging
+import sys
+
 import numpy as np
 from scipy.io import wavfile #for wav file reading
 
@@ -60,6 +64,7 @@ def processAXCTD(inputfile, outputfile):
             print("[!] Error- unexpected number of dimensions in audio file- terminating!")
             exit()
         
+        logging.info("Demodulating audio")
         #demodulating PCM data
         bitstream, times, p7500 = demodulateAXCTD.demodulateAXCTD(audiostream, fs)
         
@@ -101,15 +106,24 @@ def processAXCTD(inputfile, outputfile):
 
 #function to handle input arguments
 
+def main():
+    parser = argparse.ArgumentParser(description='Demodulate an audio file to text')
+    parser.add_argument('-i', '--input', default='testfiles/sample_full.wav')
+    parser.add_argument('-o', '--output', default='testfiles/output.txt')
 
+    parser.add_argument('-v', '--verbose', action='store_true', help='Enable verbose output')
+
+    args = parser.parse_args()
+
+    loglevel = logging.DEBUG if args.verbose else logging.INFO
+    logging.basicConfig(level=loglevel, stream=sys.stdout)
+
+    return processAXCTD(args.input, args.output)
 
 
 #MAIN
 if __name__ == "__main__":
-    inputfile = "testfiles/sample_full.wav"
-    outputfile = "testfiles/output.txt"
-    
-    processAXCTD(inputfile, outputfile)
+    main()
 
 
 

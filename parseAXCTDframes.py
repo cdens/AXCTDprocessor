@@ -27,7 +27,13 @@
 ###################################################################################
 
 import numpy as np
-import gsw
+
+# Can we remove gsw as a dependency?
+try:
+    import gsw
+    use_gsw = True
+except ImportError:
+    use_gsw = False
 
 
 ###################################################################################
@@ -184,7 +190,10 @@ def convertFrame(frame, time):
     C = 0.0153199220 * binListToInt(frame[4:15]) - 0.0622192776
     
     #salinity from temperature/conductivity/depth
-    S = gsw.SP_from_C(C,T,z) #assumes pressure (mbar) approx. equals depth (m)
+    if use_gsw:
+        S = gsw.SP_from_C(C,T,z) #assumes pressure (mbar) approx. equals depth (m)
+    else:
+        S = float('nan')
     
     return T, C, S, z
 
