@@ -30,7 +30,7 @@
 import logging
 
 import numpy as np
-from scipy import signal, interpolate, optimize
+from scipy import signal, interpolate, optimize, stats
 import matplotlib.pyplot as plt
 
 ###################################################################################
@@ -93,6 +93,7 @@ def demodulateAXCTD0(pcm, fs):
                 
             #look for upcrossings/downcrossings in expected ranges
             bitranges = [[0.9,1.1],[0.8,1.2],[0.7,1.3],[0.4,1.6]]
+
             for br in bitranges:
                 upcoming = pcmlow[start:start+int(np.round(br[1]*pointsperbit))]
                 ind = getnextncrossings(upcoming, 2-cbit, int(np.round(br[0]*pointsperbit)))
@@ -362,7 +363,7 @@ def demodulateAXCTD(pcmin, fs):
     corr = corr_f1 - corr_f2
     # bit times
     #tbits = np.arange(len(pcm) // (fs / bitrate)) * (1 / bitrate) + tstart
-    fcorr = interpolate.interp1d(t1, corr)
+    fcorr = interpolate.interp1d(t1, corr, fill_value=0.0, bounds_error=False)
 
     # Solve for best frequency offset between receiver and transmitter
     args = (fcorr, tstart, fs, len(corr), bitrate)
@@ -373,14 +374,15 @@ def demodulateAXCTD(pcmin, fs):
     foffset = 0.0
     logging.info(f"Frequency offset: {foffset:0.3f} Hz")
 
-    tbits, bits = sample_bits0(foffset, *args)
-    print(tbits.shape, bits.shape)
+    tbits0, bits0 = sample_bits0(foffset, *args)
+    print(tbits0.shape, bits0.shape)
 
     axs3[0].plot(t1, corr, label='dcorrelation')
-    axs3[0].plot(tbits, bits, marker='x', linewidth=0)
+    axs3[0].plot(tbits0, bits0, marker='x', linewidth=0)
     axs3[0].grid(True)
     #axs2[1].legend()
     axs3[0].set_xlabel('Time [sec]')
+    axs3[0].set_title('Sample Matched Filter Waveform Naively')
 
     # lowpass filter?
 
@@ -393,43 +395,72 @@ def demodulateAXCTD(pcmin, fs):
     axs3[1].plot(tbits, bits, marker='x', linewidth=0)
     axs3[1].grid(True)
     #axs2[1].legend()
+    axs3[1].set_title('Apply Schmitt Trigger Edge Filter')
     axs3[1].set_xlabel('Time [sec]')
 
     # Extract bit transition times from here
 
     diff_corr_d = np.diff(corr_d)
-    edges_idx = np.argwhere(np.abs(diff_corr_d) > 0.8)
+    #edges_idx = np.argwhere(np.abs(diff_corr_d) > 0.5)
+
+    # Consider edges within 1/4 symbol of each other as
+    # false spurious edges
+    mindist = int(np.round(fs * (0.25 / bitrate)))
+    edges_idx = zerocrossings(corr_d, mindist=mindist)
+    # snap edge times to nearest actual time
+    # (this doesn't seem like it will work)
+    tin = [0.0, tstart]
+    tout = [0.0, tstart]
+
+    # Get the times of each edge
+    edges_times = [float(idx / fs) + tstart for idx in edges_idx]
+    # Get delta timestamp to previous edge
+    edges_dtimes = np.diff(edges_times, prepend=edges_times[0])
+    # Round delta times to nearest multiple of the bitrate
+    edges_dtimes_r = np.round(edges_dtimes * bitrate) / bitrate
+    # Sum to get rounded actual time
+    edges_times_r = np.round(np.cumsum(edges_dtimes_r) + tstart, decimals=8)
+
+    for ii, (tedge, tedge2) in enumerate(zip(edges_times, edges_times_r)):
+        logging.info(f"{ii} {tedge:0.6f} {tedge2}")
 
 
-    tin, tout = [0.0,], [0.0,]
-    for ii, idx in enumerate(edges_idx):
-        tedge = idx * fs
-
-        # nearest bit time
-        tedge2 = np.round(tedge / bitrate) * bitrate
-        tin.append(tedge)
-        tout.append(tedge2)
-    tin.append(fs*len(pcm))
-    tout.append(fs*len(pcm))
+    time1 = len(pcm) / fs + tstart
+    tin = [0.0, tstart] + list(edges_times) + [time1,]
+    tout = [0.0, tstart] + list(edges_times_r) + [time1,]
 
     # Function to convert actual time to desired sample time
-    fsampletime = interpolate.interp1d(tin, tout, kind='quadratic')
+    #print(tin, tout)
+    logging.info(f"Found {len(edges_idx):d} zero crossings")
 
-    tbits = np.arange(nbits) * (1 / bitrate1) + tstart
-    tbits = fsampletime(tbits)
-    bits = fcorr(tbits)
+    fsampletime = interpolate.interp1d(np.array(tout), np.array(tin), kind='linear')
+
+
+
+    nbits = len(pcm) // (fs / bitrate)
+    tbits2 = np.arange(nbits) * (1 / bitrate) + tstart
+    print(min(tbits), max(tbits2), len(tbits2))
+    tbits2 = fsampletime(tbits2) + (1 / (bitrate*2))
+    print(min(tbits2), max(tbits2), len(tbits2))
+    bits2 = fcorr(tbits2)
     
 
 
-    axs3[0].plot(t1, corr, label='dcorrelation')
-    axs3[0].plot(tbits, bits, marker='x', linewidth=0)
-    axs3[0].grid(True)
+    axs3[2].plot(t1, corr, label='MF')
+    axs3[2].plot(tbits0, bits0, marker='x', linewidth=0, label='naive')
+    axs3[2].plot(tbits2, bits2, marker='+', linewidth=0, label='recovered')
+    axs3[2].legend()
+    axs3[2].grid(True)
+    axs3[2].set_title('Sample Matched Filter Waveform with Symbol Timing Recovery')
+
+    plt.tight_layout()
 
 
+    # Convert bits to actual array of bits
+    bits_d = bits > 0
 
 
-
-    recover_timing(pcm, t1, fs)
+    #recover_timing(pcm, t1, fs)
 
     plt.show()
 
@@ -631,6 +662,25 @@ def sample_bits0(freqoffset, mf_func, tstart, fs, nsamples, bitrate):
 
 def gen_edges(data, i0):
     """ Generate zero crossings """
+    pass
+
+def zerocrossings(data, mindist=100):
+    """ Get all zero crossings, but filter out consecutive crossings
+    that are within mindist samples of previous crossings.
+    """
+
+
+    # <= 0 so that if it lands on zero, it isn't missed.
+    # the 2nd one will be thrown out by the min distance parameter
+    idx_signchange = np.nonzero(data[:-1] * data[1:] <= 0)
+    logging.info("signchange shape: " + str(idx_signchange[0].shape))
+    prevchange = np.diff(idx_signchange[0], prepend=idx_signchange[0][0]-mindist)
+    # Keep only changes that are far enough apart from previous sign change
+    idx_keep = np.nonzero(prevchange >= mindist)
+    logging.info(f"Initial crossings: {len(idx_signchange[0]):d} filtered: {len(idx_keep[0]):d}")
+    return idx_signchange[0][idx_keep]
+
+
 
 
 def getnextncrossings(data, ncrossings, minind):
