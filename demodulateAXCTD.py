@@ -127,8 +127,9 @@ def demodulateAXCTD0(pcm, fs):
 
 def demodulateAXCTD(pcmin, fs):
     # TODO: we're cheating by starting after carrier received
-    tstart = 7.2
+    tstart = 0.01
     istart = int(fs * tstart)
+    iend = len(pcmin) // 8 #102400
 
 
     #basic configuration
@@ -137,215 +138,76 @@ def demodulateAXCTD(pcmin, fs):
     f2 = 800 # bit 0 (space) = 800 Hz
     bitrate = 800 #symbol rate = 800 Hz
     fprof = 7500 #7500 Hz signal associated with active profile data transmission
-    pctchecksig = 0.95 #percent of each segment to check
-    
-    #demodulation parameter calculation
-    pointsperbit = int(np.round(fs/bitrate)) #number of PCM datapoints in each bit
-    window = int(np.round(pctchecksig*pointsperbit))
-    tt = np.arange(window)/fs
+    #pctchecksig = 0.95 #percent of each segment to check
 
-    maxsamples = len(pcmin) // 8 #102400
+    #demodulation parameter calculation
+    #pointsperbit = int(np.round(fs/bitrate)) #number of PCM datapoints in each bit
+    #window = int(np.round(pctchecksig*pointsperbit))
+    #tt = np.arange(window)/fs
+
+
     # Normalize amplitude of audio signal
-    pcm = pcmin[istart:maxsamples] - np.mean(pcmin[istart:maxsamples])
-    pcm *= 1.0 / np.max(pcm)
+    pcm = pcmin[istart:iend] - np.mean(pcmin[istart:iend])
+    pcm *= 1.0 / np.max(np.abs(pcm))
     logging.info("PCM signal length: {:d} samples, {:0.3f} seconds"
                  "".format(len(pcm), len(pcm) / fs))
 
 
     t1 = np.arange(0, len(pcm) / fs, dt) + tstart
 
-    fig1, axs = plt.subplots(4, 1, sharex=True)
-
-    
     # make 1200 Hz lowpass filter to separate pilot tone from digital data
-    sos = signal.butter(4, 1200, btype='lowpass', fs=fs, output='sos')
+    sos = signal.butter(6, 1200, btype='lowpass', fs=fs, output='sos')
     pcmlow = signal.sosfilt(sos, pcm)
 
 
-
-    fs2 = 2400
-    nsamples = fs // fs2
-    #assert fs == 44100
-    #q = 20
-    #fs2 = fs // q # resample from 44.1 KHz to 44100
-
-    #pcmlow2 = signal.resample(pcmlow, num=nsamples)
-    #pcmhi  = pcm - pcmlow
-
-    axs[0].plot(t1, pcmlow)
-    axs[0].set_title('Digital data')
-    axs[0].grid(True)
-
-
-    # make highpass filter to act as a squelch.
-    # if power is present, squelch.
-    sos_sq = signal.butter(2, 10000, btype='highpass', fs=fs, output='sos')
-    pcm_sq = signal.sosfilt(sos_sq, pcm)
-
-    
-
-
-
-    # make 7000-8000 bandpass filter for pilot tone
-    sos = signal.butter(6, [7400, 7600], btype='bandpass', fs=fs, output='sos')
-    pcm7500hz = signal.sosfilt(sos, pcm)
-    pcm7500hz /= np.max(np.abs(pcm7500hz))
-
-
-
-    axs[1].plot(t1, pcm7500hz)
-    axs[1].set_title('Pilot tone')
-    axs[1].grid(True)
-    
-    ##############################################
-    # Use 400 hz signal as frequency reference
-    f400hz = np.exp(2*np.pi*1j*400.0*t1)
-    # make 200-600 bandpass filter to track phase of 400 Hz data
-    sos = signal.butter(4, [300, 500], btype='bandpass', fs=fs, output='sos')
-    pcm400hz = signal.sosfilt(sos, pcm)
-
-    # Calculate the frequency/phase offset of the pilot tone from our internal
-    # reference
-    soslp = signal.butter(4, 100, btype='lowpass', fs=fs, output='sos')
-    fmix = signal.sosfilt(soslp, f400hz * pcm400hz)
-    fmix /= np.max(np.abs(fmix))
-    #fmix_dphase = np.degrees(np.diff(np.unwrap(np.angle(fmix))))
-    # Relative phase between reference and transmitted
-    fmix_phase = np.unwrap(np.angle(fmix))
-
-    # Calculate actual times (do we add or subtract?)
-    t2 = t1 - fmix_phase / (2*np.pi*400)
-
-
-    axs[2].plot(t1, np.real(f400hz), label='intref', linewidth=1.0)
-    axs[2].plot(t1, 0.7071*pcm400hz, label='TX', linewidth=1.0)
-
-    # Internal ref, timebase adjusted to actual
-    axs[2].plot(t2, -0.5*np.real(f400hz), label='intref-adj', linewidth=1.0)
-    axs[2].set_title('400 Hz Tone')
-    axs[2].grid(True)
-    axs[2].legend()
-
-
-    #axs[3].plot(t1, fmix_phase / (2*np.pi), label='Phase')
-    #axs[3].set_ylabel('cycles')
-    #axs[3].grid(True)
-    #axs[3].set_title('400 Hz Phase Tracking')
-
-    # end 400 hz frequency reference
-    #---------------------------------
-
-    # perform autocorrelation
-
-    #pcm400auto = autocorr(pcmlow)
-    #axs[3].plot(t1, pcm400auto)
-    #axs[3].set_title('autocorrelation')
-
-
-
-    logging.debug("Done filtering")
-    plt.tight_layout()
-
-
+    #--------------------------------------------------------------
     logging.debug("Making spectrogram")
-    fig2, axs2 = plt.subplots(4, 1, sharex=True)
+    fig2, axs2 = plt.subplots(3, 1, sharex=True)
     nfft = 8192
     nperseg =  nfft // 2
     noverlap = 0
     f, t, Sxx = signal.spectrogram(pcmlow, fs=fs, nfft=nfft, nperseg=nperseg, noverlap=noverlap) #fs // bitrate)
     logging.info("Spectrogram size: " + str(Sxx.shape))
-    #exit()
-    nfreqs = 256
-    axs2[0].pcolormesh(t + tstart, f[0:nfreqs], 10*np.log10(Sxx[0:nfreqs, :]), shading='gouraud')
 
-    axs2[0].set_ylabel('Frequency [Hz]')
-    axs2[0].set_xlabel('Time [sec]')
-
-    # Show matched filters
-    #y = exp(2*pi*j*fspac.*t)';
-    kernel_len = fs // bitrate
-    tkern = np.arange(kernel_len) / bitrate
-    y1 = np.exp(2*np.pi*1j*f1*tkern)
-    corr_f1 = np.abs(signal.correlate(pcmlow, y1, mode='same'))
-    y2 = np.exp(2*np.pi*1j*f2*tkern)
-    corr_f2 = np.abs(signal.correlate(pcmlow, y2, mode='same'))
-    corr_f1 -= np.mean(corr_f1)
-    corr_f2 -= np.mean(corr_f2)
-    corr_f1 /= np.max(np.abs(corr_f1))
-    corr_f2 /= np.max(np.abs(corr_f2))
-
-    y2 = 0.5*np.sin(2*np.pi*f2*(t1 + 0.25 / f2))
-    axs2[1].plot(t1, y2, linewidth=0.75, label='bits')
-
-    #axs2[1].plot(t1, corr_f1 / np.max(corr_f1), label=f'{f1:0.0f}')
-    #axs2[1].plot(t1, corr_f2 / np.max(corr_f2), label=f'{f2:0.0f}')
-    corr = corr_f1 - corr_f2
-    # bit times
-    #tbits = np.arange(len(pcm) // (fs / bitrate)) * (1 / bitrate) + tstart
-    fcorr = interpolate.interp1d(t1, corr)
-    tbits, bits = sample_bits0(0.0, fcorr, tstart, fs, len(pcm), bitrate)
-    print(tbits.shape, bits.shape)
+    for ii, nfreqs in enumerate((256, len(f) // 2)):
+        axs2[ii].pcolormesh(t + tstart, f[0:nfreqs], 10*np.log10(Sxx[0:nfreqs, :]), shading='gouraud')
+        axs2[ii].set_ylabel('Frequency [Hz]')
+        axs2[ii].set_xlabel('Time [sec]')
 
 
-    axs2[1].plot(t1, corr, label='dcorrelation')
-    axs2[1].plot(tbits, bits, marker='x', linewidth=0)
-    axs2[1].grid(True)
-    #axs2[1].legend()
-    axs2[1].set_xlabel('Time [sec]')
-
-
-    #---------------------------------------------
-    # Synchronize time base
-    # internal 7500 hz reference
-    f7500hz = np.exp(2*np.pi*1j*7500.0*t1)
-
-    # Calculate the frequency/phase offset of the pilot tone from our internal
-    # reference
-    sos75 = signal.butter(4, 1000, btype='lowpass', fs=fs, output='sos')
-    fmix = signal.sosfilt(sos75, f7500hz * pcm7500hz)
-    fmix /= np.max(np.abs(fmix))
-    #fmix_dphase = np.degrees(np.diff(np.unwrap(np.angle(fmix))))
-    # Relative phase between reference and transmitted
-    fmix_phase = np.unwrap(np.angle(fmix))
-
-    # Calculate actual times (do we add or subtract?)
-    t2 = t1 + fmix_phase / (2*np.pi*7500)
-
-
-    axs2[2].plot(t1, np.real(f7500hz), label='intref', linewidth=1.0)
-
-    # Internal ref, timebase adjusted to actual
-    axs2[2].plot(t2, -0.7071*np.real(f7500hz), label='intref-adj', linewidth=1.0)
-
-
-    axs2[2].plot(t1, pcm7500hz, label='TX', linewidth=1.0, alpha=0.75)
-
-    axs2[2].set_title('7.5 KHz pilot tone')
-
-
-
+    t2, data_db, active_db = signal_levels(pcm, fs=fs)
+    t2 += tstart
+    axs2[2].plot(t2, data_db, label='Data')
+    axs2[2].plot(t2, active_db, label='Active')
+    axs2[2].set_title('Signal Levels')
+    axs2[2].set_ylabel('dB')
+    axs2[2].set_xlabel('Time [sec]')
     axs2[2].grid(True)
     axs2[2].legend()
-
-
-    axs2[3].plot(t1, fmix_phase / (2*np.pi), label='Phase')
-    axs2[3].set_ylabel('cycles')
-    axs2[3].grid(True)
-
-    
-
-
     plt.tight_layout()
 
 
+
+    fig1, axs = plt.subplots(2, 1, sharex=True)
+
+    # Squelch digital data and display
+    f_datasq = interpolate.interp1d(t2, data_db > 10, bounds_error=False, fill_value=0)
+
+    axs[0].plot(t1, pcmlow * f_datasq(t1))
+    axs[0].set_title('Digital data (squelched)')
+    axs[0].grid(True)
+
+
+    logging.debug("Done filtering")
+    plt.tight_layout()
 
     # Investigate complex IQ demodulation
     fig3, axs3 = plt.subplots(3, 1, sharex=True)
     fc = 600
     # convert original lowpassed signal to complex domain IQ, centered atfc
 
-    f600hz = np.exp(2*np.pi*1j*fc*t1)
-    sos400 = signal.butter(4, 400, btype='lowpass', fs=fs, output='sos')
+    f600hz = np.exp(2*np.pi*1j*fc*t1) * f_datasq(t1)
+    sos400 = signal.butter(6, 400, btype='lowpass', fs=fs, output='sos')
     pcmiq = signal.sosfilt(sos400, f600hz * pcmlow)
     pcmiq /= np.max(np.abs(pcmiq))
 
@@ -365,20 +227,13 @@ def demodulateAXCTD(pcmin, fs):
     #tbits = np.arange(len(pcm) // (fs / bitrate)) * (1 / bitrate) + tstart
     fcorr = interpolate.interp1d(t1, corr, fill_value=0.0, bounds_error=False)
 
-    # Solve for best frequency offset between receiver and transmitter
     args = (fcorr, tstart, fs, len(corr), bitrate)
-    logging.info("args: " + str(args))
-    #freqopt = optimize.minimize(sampling_uncertainty, args=args,
-    #                            x0=0.0, bounds=((-0.5, 0.5),))
-    #foffset = float(freqopt.x)
-    foffset = 0.0
-    logging.info(f"Frequency offset: {foffset:0.3f} Hz")
+    tbits0, bits0 = sample_bits0(0.0, *args)
 
-    tbits0, bits0 = sample_bits0(foffset, *args)
-    print(tbits0.shape, bits0.shape)
+    markeropts = {'marker':'x', 'linewidth': 0, 'markersize': 1.0}
 
     axs3[0].plot(t1, corr, label='dcorrelation')
-    axs3[0].plot(tbits0, bits0, marker='x', linewidth=0)
+    axs3[0].plot(tbits0, bits0, **markeropts)
     axs3[0].grid(True)
     #axs2[1].legend()
     axs3[0].set_xlabel('Time [sec]')
@@ -389,10 +244,10 @@ def demodulateAXCTD(pcmin, fs):
     corr_d = schmitt_trigger(corr)
     fcorr_d = interpolate.interp1d(t1, corr_d)
     args = (fcorr_d, tstart, fs, len(corr), bitrate)
-    tbits, bits = sample_bits0(foffset, *args)
+    tbits, bits = sample_bits0(0.0, *args)
 
     axs3[1].plot(t1, corr_d, label='dcorr_d')
-    axs3[1].plot(tbits, bits, marker='x', linewidth=0)
+    axs3[1].plot(tbits, bits, **markeropts)
     axs3[1].grid(True)
     #axs2[1].legend()
     axs3[1].set_title('Apply Schmitt Trigger Edge Filter')
@@ -421,8 +276,8 @@ def demodulateAXCTD(pcmin, fs):
     # Sum to get rounded actual time
     edges_times_r = np.round(np.cumsum(edges_dtimes_r) + tstart, decimals=8)
 
-    for ii, (tedge, tedge2) in enumerate(zip(edges_times, edges_times_r)):
-        logging.info(f"{ii} {tedge:0.6f} {tedge2}")
+    #for ii, (tedge, tedge2) in enumerate(zip(edges_times, edges_times_r)):
+    #    logging.info(f"{ii} {tedge:0.6f} {tedge2}")
 
 
     time1 = len(pcm) / fs + tstart
@@ -447,11 +302,12 @@ def demodulateAXCTD(pcmin, fs):
 
 
     axs3[2].plot(t1, corr, label='MF')
-    axs3[2].plot(tbits0, bits0, marker='x', linewidth=0, label='naive')
-    axs3[2].plot(tbits2, bits2, marker='+', linewidth=0, label='recovered')
+    axs3[2].plot(tbits0, bits0, label='naive', **markeropts)
+    markeropts['marker'] = '+'
+    axs3[2].plot(tbits2, bits2, label='recovered', **markeropts)
     axs3[2].legend()
     axs3[2].grid(True)
-    axs3[2].set_title('Sample Matched Filter Waveform with Symbol Timing Recovery')
+    axs3[2].set_title('Sample Matched Filter Waveform with Recovered Symbol Times')
 
     plt.tight_layout()
 
@@ -485,88 +341,48 @@ def schmitt_trigger(wfm):
     #return y
 
 
-def demodulateAXCTD2(pcmin, fs):
 
+def signal_levels(pcm, fs, minratio=2.0):
+    """ 
+    Determine whether a signal has power by examining
+    the ratio of powers in relevant bands.
 
-    # TODO: we're cheating by starting after carrier received
-    tstart = 7.2
-    istart = int(fs * tstart)
+    We define a quiet band, digital data band, and profile active band
 
+    # TODO: use periodogram to minimize memory usage and make this
+    able to be streamed
 
-    #basic configuration
-    dt = 1/fs
-    f1 = 400 # bit 1 (mark) = 400 Hz
-    f2 = 800 # bit 0 (space) = 800 Hz
-    bitrate = 800 #symbol rate = 800 Hz
-    fprof = 7500 #7500 Hz signal associated with active profile data transmission
-    pctchecksig = 0.95 #percent of each segment to check
+    """
+
+    logging.debug("Making spectrogram")
+    nfft = 4096
+    nperseg =  nfft // 2
+    f, t, Sxx = signal.spectrogram(pcm, fs=fs, nfft=nfft,
+                nperseg=nperseg, noverlap=0, scaling='spectrum', mode='magnitude')
+    dt = np.mean(np.diff(t))
+    logging.info("Spectrogram size: {:s}, dt={:0.4f} f=[{:0.2f},{:0.2f})"
+                "".format(str(Sxx.shape), dt, min(f), max(f) ))
     
-    #demodulation parameter calculation
-    pointsperbit = int(np.round(fs/bitrate)) #number of PCM datapoints in each bit
-    window = int(np.round(pctchecksig*pointsperbit))
-    tt = np.arange(window)/fs
+    # Get the indices that represent each band, using bw of about 700 hz
+    bw2 = 400.0
+    band_fc = [600,         # digital data band
+               11000 - bw2, # quiet band
+               7500         # profile active
+              ]
+    # Power levels in each band
+    levels = []
+    for fc in band_fc:
+        flo, fhi = fc - bw2, fc + bw2
+        bandidx = np.nonzero((flo <= f) * (f < fhi))
+        level = np.sum(Sxx[bandidx[0], :], axis=0)
+        levels.append(level)
+    # When we use mode='magnitude', scale by 20 instead of 10 for power
+    # Signal level of data band
+    data_db = 20*np.log10(levels[0] / levels[1])
+    # signal level of the profile active tone
+    active_db = 20*np.log10(levels[2] / levels[1])
 
-    maxsamples = len(pcmin) // 8 #102400
-    # Normalize amplitude of audio signal
-    pcm = pcmin[istart:maxsamples] - np.mean(pcmin[istart:maxsamples])
-    pcm *= 1.0 / np.max(pcm)
-    logging.info("PCM signal length: {:d} samples, {:0.3f} seconds"
-                 "".format(len(pcm), len(pcm) / fs))
-
-
-    t1 = np.arange(0, len(pcm) / fs, dt) + tstart
-
-    fig1, axs = plt.subplots(4, 1, sharex=True)
-
-
-    
-    # make 1200 Hz lowpass filter to separate pilot tone from digital data
-    sos = signal.butter(4, 1200, btype='lowpass', fs=fs, output='sos')
-    pcmlow = signal.sosfilt(sos, pcm)
-
-
-
-    fs2 = 2400
-    nsamples = fs // fs2
-    #assert fs == 44100
-    #q = 20
-    #fs2 = fs // q # resample from 44.1 KHz to 44100
-
-    #pcmlow2 = signal.resample(pcmlow, num=nsamples)
-    #pcmhi  = pcm - pcmlow
-
-    axs[0].plot(t1, pcmlow)
-    axs[0].set_title('Digital data')
-    axs[0].grid(True)
-
-
-    # make highpass filter to act as a squelch.
-    # if power is present, squelch.
-    #sos_sq = signal.butter(2, 10000, btype='highpass', fs=fs, output='sos')
-    #pcm_sq = signal.sosfilt(sos_sq, pcm)
-
-    # starting index
-    bittime = 1 / bitrate
-    t2a = tstart
-    t2b = t2a + bittime
-    wavtime = len(pcm) / fs
-
-    while t2b < wavtime:
-
-        i2a = int(t2a * fs)
-        i2b = int(t2b * fs)
-        # waveform of this bit
-        bitwfm = pcm[i2a:i2b]
-
-        t2a = t2b
-        t2b = t2a + bittime
-    # end while
-
-
-    # make 7000-8000 bandpass filter for pilot tone
-    sos = signal.butter(6, [7400, 7600], btype='bandpass', fs=fs, output='sos')
-    pcm7500hz = signal.sosfilt(sos, pcm)
-    pcm7500hz /= np.max(np.abs(pcm7500hz))
+    return t, data_db, active_db
 
 
 
