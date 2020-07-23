@@ -123,8 +123,6 @@ def demodulateAXCTD0(pcm, fs):
 
 
 
-
-
 def demodulate_axctd(pcmin, fs, bplot=True):
 
     tstart = 0.01
@@ -149,7 +147,8 @@ def demodulate_axctd(pcmin, fs, bplot=True):
 
     t1 = np.arange(tstart, len(pcm) / fs + tstart, dt)
 
-    # make 1200 Hz lowpass filter to separate pilot tone from digital data
+    # Use bandpass filter to extract digital data only
+    #sos = signal.butter(6, [f1 * 0.5, f2 * 1.5], btype='bandpass', fs=fs, output='sos')
     sos = signal.butter(6, 1200, btype='lowpass', fs=fs, output='sos')
     pcmlow = signal.sosfilt(sos, pcm)
 
@@ -199,9 +198,7 @@ def demodulate_axctd(pcmin, fs, bplot=True):
         axs[0].grid(True)
         plt.tight_layout()
 
-
     logging.debug("Done filtering")
-
     # Investigate complex IQ demodulation
 
     fc = (f1 + f2) / 2
@@ -210,11 +207,11 @@ def demodulate_axctd(pcmin, fs, bplot=True):
     f600hz = np.exp(2*np.pi*1j*fc*t1) * f_datasq(t1)
     sos400 = signal.butter(6, 400, btype='lowpass', fs=fs, output='sos')
     pcmiq = signal.sosfilt(sos400, f600hz * pcmlow)
+    #pcmiq = f600hz * pcmlow
     pcmiq /= np.max(np.abs(pcmiq))
     pcmiq *= f_datasq(t1)
 
     # Perform matched filtering with complex IQ data
-    #y = exp(2*pi*j*fspac.*t)';
     kernel_len = fs // bitrate
     tkern = np.arange(0.0, kernel_len/bitrate, 1.0/bitrate)
     y1 = np.exp(2*np.pi*1j*(f1-fc)*tkern)
@@ -245,7 +242,7 @@ def demodulate_axctd(pcmin, fs, bplot=True):
 
     # lowpass filter?
 
-    corr_d = schmitt_trigger(corr)
+    corr_d = schmitt_trigger(corr, fast=False)
     fcorr_d = interpolate.interp1d(t1, corr_d)
     args = (fcorr_d, tstart, fs, len(corr), bitrate)
     tbits, bits = sample_bits0(0.0, *args)
@@ -320,20 +317,20 @@ def demodulate_axctd(pcmin, fs, bplot=True):
     return list(tbits2), bits_d, list(data_db2), list(active_db2), figures
 
 
-def schmitt_trigger(wfm):
-    """ TODO: actually turn this into a real hysteresis
+def schmitt_trigger(wfm, fast=False):
+    """ Transition debouncing
     https://en.wikipedia.org/wiki/Schmitt_trigger
     """
+    if fast:
+        return np.sign(wfm) * 0.5
+
     wfm2 = np.empty(wfm.shape)
-    a, b = 10.0, 0.0 # amplifier gain, feedback transfer function
-    xout = 0.0 # output node
+    a, b = 10.0, 0.1 # amplifier gain, feedback transfer function
+    xout = wfm[0] # output node
     for ii, x in enumerate(wfm):
         xout = min(0.5, max(-0.5, xout * b + x * a))
         wfm2[ii] = xout
-
     return wfm2
-    #y = np.sign(wfm)
-    #return y
 
 
 
