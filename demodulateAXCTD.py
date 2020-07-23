@@ -125,11 +125,11 @@ def demodulateAXCTD0(pcm, fs):
 
 
 
-def demodulateAXCTD(pcmin, fs):
-    # TODO: we're cheating by starting after carrier received
+def demodulate_axctd(pcmin, fs, bplot=True):
+
     tstart = 0.01
     istart = int(fs * tstart)
-    iend = len(pcmin) // 8 #102400
+    iend = len(pcmin) #// 8 #102400
 
 
     #basic configuration
@@ -138,83 +138,85 @@ def demodulateAXCTD(pcmin, fs):
     f2 = 800 # bit 0 (space) = 800 Hz
     bitrate = 800 #symbol rate = 800 Hz
     fprof = 7500 #7500 Hz signal associated with active profile data transmission
-    #pctchecksig = 0.95 #percent of each segment to check
-
-    #demodulation parameter calculation
-    #pointsperbit = int(np.round(fs/bitrate)) #number of PCM datapoints in each bit
-    #window = int(np.round(pctchecksig*pointsperbit))
-    #tt = np.arange(window)/fs
 
 
-    # Normalize amplitude of audio signal
+    # Normalize amplitude/DC offset of audio signal
     pcm = pcmin[istart:iend] - np.mean(pcmin[istart:iend])
     pcm *= 1.0 / np.max(np.abs(pcm))
     logging.info("PCM signal length: {:d} samples, {:0.3f} seconds"
                  "".format(len(pcm), len(pcm) / fs))
 
 
-    t1 = np.arange(0, len(pcm) / fs, dt) + tstart
+    t1 = np.arange(tstart, len(pcm) / fs + tstart, dt)
 
     # make 1200 Hz lowpass filter to separate pilot tone from digital data
     sos = signal.butter(6, 1200, btype='lowpass', fs=fs, output='sos')
     pcmlow = signal.sosfilt(sos, pcm)
 
-
+    figures = []
     #--------------------------------------------------------------
     logging.debug("Making spectrogram")
-    fig2, axs2 = plt.subplots(3, 1, sharex=True)
-    nfft = 8192
-    nperseg =  nfft // 2
-    noverlap = 0
-    f, t, Sxx = signal.spectrogram(pcmlow, fs=fs, nfft=nfft, nperseg=nperseg, noverlap=noverlap) #fs // bitrate)
-    logging.info("Spectrogram size: " + str(Sxx.shape))
 
-    for ii, nfreqs in enumerate((256, len(f) // 2)):
-        axs2[ii].pcolormesh(t + tstart, f[0:nfreqs], 10*np.log10(Sxx[0:nfreqs, :]), shading='gouraud')
-        axs2[ii].set_ylabel('Frequency [Hz]')
-        axs2[ii].set_xlabel('Time [sec]')
+    if bplot:
+        fig2, axs2 = plt.subplots(3, 1, sharex=True)
+        figures.append(fig2)
+        nfft = 8192
+        nperseg =  nfft // 2
+        noverlap = 0
+        f, t, Sxx = signal.spectrogram(pcmlow, fs=fs, nfft=nfft, nperseg=nperseg, noverlap=noverlap) #fs // bitrate)
+        logging.info("Spectrogram size: " + str(Sxx.shape))
+
+        for ii, nfreqs in enumerate((256, len(f) // 2)):
+            axs2[ii].pcolormesh(t + tstart, f[0:nfreqs], 10*np.log10(Sxx[0:nfreqs, :]), shading='gouraud')
+            axs2[ii].set_ylabel('Frequency [Hz]')
+            axs2[ii].set_xlabel('Time [sec]')
 
 
     t2, data_db, active_db = signal_levels(pcm, fs=fs)
     t2 += tstart
-    axs2[2].plot(t2, data_db, label='Data')
-    axs2[2].plot(t2, active_db, label='Active')
-    axs2[2].set_title('Signal Levels')
-    axs2[2].set_ylabel('dB')
-    axs2[2].set_xlabel('Time [sec]')
-    axs2[2].grid(True)
-    axs2[2].legend()
-    plt.tight_layout()
 
+    if bplot:
+        axs2[2].plot(t2, data_db, label='Data')
+        axs2[2].plot(t2, active_db, label='Active')
+        axs2[2].set_title('Signal Levels')
+        axs2[2].set_ylabel('dB')
+        axs2[2].set_xlabel('Time [sec]')
+        axs2[2].grid(True)
+        axs2[2].legend()
+        plt.tight_layout()
 
-
-    fig1, axs = plt.subplots(2, 1, sharex=True)
 
     # Squelch digital data and display
-    f_datasq = interpolate.interp1d(t2, data_db > 10, bounds_error=False, fill_value=0)
+    f_datasq = interpolate.interp1d(t2, data_db, bounds_error=False, fill_value=0)
+    f_active = interpolate.interp1d(t2, active_db, bounds_error=False, fill_value=0)
 
-    axs[0].plot(t1, pcmlow * f_datasq(t1))
-    axs[0].set_title('Digital data (squelched)')
-    axs[0].grid(True)
+    if bplot:
+        fig1, axs = plt.subplots(2, 1, sharex=True)
+        figures.append(fig1)
+
+        axs[0].plot(t1, pcmlow * (f_datasq(t1) > 10.0))
+        axs[0].set_title('Digital data (squelched)')
+        axs[0].grid(True)
+        plt.tight_layout()
 
 
     logging.debug("Done filtering")
-    plt.tight_layout()
 
     # Investigate complex IQ demodulation
-    fig3, axs3 = plt.subplots(3, 1, sharex=True)
-    fc = 600
+
+    fc = (f1 + f2) / 2
     # convert original lowpassed signal to complex domain IQ, centered atfc
 
     f600hz = np.exp(2*np.pi*1j*fc*t1) * f_datasq(t1)
     sos400 = signal.butter(6, 400, btype='lowpass', fs=fs, output='sos')
     pcmiq = signal.sosfilt(sos400, f600hz * pcmlow)
     pcmiq /= np.max(np.abs(pcmiq))
+    pcmiq *= f_datasq(t1)
 
     # Perform matched filtering with complex IQ data
     #y = exp(2*pi*j*fspac.*t)';
     kernel_len = fs // bitrate
-    tkern = np.arange(kernel_len) / bitrate
+    tkern = np.arange(0.0, kernel_len/bitrate, 1.0/bitrate)
     y1 = np.exp(2*np.pi*1j*(f1-fc)*tkern)
     corr_f1 = np.abs(signal.correlate(pcmiq, y1, mode='same'))
     y2 = np.exp(2*np.pi*1j*(f2-fc)*tkern)
@@ -223,21 +225,23 @@ def demodulateAXCTD(pcmin, fs):
     corr_f2 /= np.max(np.abs(corr_f2))
 
     corr = corr_f1 - corr_f2
-    # bit times
-    #tbits = np.arange(len(pcm) // (fs / bitrate)) * (1 / bitrate) + tstart
     fcorr = interpolate.interp1d(t1, corr, fill_value=0.0, bounds_error=False)
 
     args = (fcorr, tstart, fs, len(corr), bitrate)
     tbits0, bits0 = sample_bits0(0.0, *args)
 
-    markeropts = {'marker':'x', 'linewidth': 0, 'markersize': 1.0}
+    lineopts = {'linewidth': 0.75}
+    markeropts = {'marker':'x', 'linewidth': 0}
 
-    axs3[0].plot(t1, corr, label='dcorrelation')
-    axs3[0].plot(tbits0, bits0, **markeropts)
-    axs3[0].grid(True)
-    #axs2[1].legend()
-    axs3[0].set_xlabel('Time [sec]')
-    axs3[0].set_title('Sample Matched Filter Waveform Naively')
+    if bplot:
+        fig3, axs3 = plt.subplots(3, 1, sharex=True)
+        figures.append(fig3)
+        axs3[0].plot(t1, corr, label='dcorrelation', **lineopts)
+        axs3[0].plot(tbits0, bits0, **markeropts)
+        axs3[0].grid(True)
+        #axs2[1].legend()
+        axs3[0].set_xlabel('Time [sec]')
+        axs3[0].set_title('Sample Matched Filter Waveform Naively')
 
     # lowpass filter?
 
@@ -246,16 +250,17 @@ def demodulateAXCTD(pcmin, fs):
     args = (fcorr_d, tstart, fs, len(corr), bitrate)
     tbits, bits = sample_bits0(0.0, *args)
 
-    axs3[1].plot(t1, corr_d, label='dcorr_d')
-    axs3[1].plot(tbits, bits, **markeropts)
-    axs3[1].grid(True)
-    #axs2[1].legend()
-    axs3[1].set_title('Apply Schmitt Trigger Edge Filter')
-    axs3[1].set_xlabel('Time [sec]')
+    if bplot:
+        axs3[1].plot(t1, corr_d, label='dcorr_d', **lineopts)
+        axs3[1].plot(tbits, bits, **markeropts)
+        axs3[1].grid(True)
+        #axs2[1].legend()
+        axs3[1].set_title('Apply Schmitt Trigger Edge Filter')
+        axs3[1].set_xlabel('Time [sec]')
 
     # Extract bit transition times from here
 
-    diff_corr_d = np.diff(corr_d)
+    #diff_corr_d = np.diff(corr_d)
     #edges_idx = np.argwhere(np.abs(diff_corr_d) > 0.5)
 
     # Consider edges within 1/4 symbol of each other as
@@ -267,62 +272,52 @@ def demodulateAXCTD(pcmin, fs):
     tin = [0.0, tstart]
     tout = [0.0, tstart]
 
-    # Get the times of each edge
-    edges_times = [float(idx / fs) + tstart for idx in edges_idx]
+    # Get the times of each edge as seen by the receiver
+    edges_time_rx = [float(idx / fs) + tstart for idx in edges_idx]
     # Get delta timestamp to previous edge
-    edges_dtimes = np.diff(edges_times, prepend=edges_times[0])
-    # Round delta times to nearest multiple of the bitrate
-    edges_dtimes_r = np.round(edges_dtimes * bitrate) / bitrate
-    # Sum to get rounded actual time
-    edges_times_r = np.round(np.cumsum(edges_dtimes_r) + tstart, decimals=8)
-
-    #for ii, (tedge, tedge2) in enumerate(zip(edges_times, edges_times_r)):
-    #    logging.info(f"{ii} {tedge:0.6f} {tedge2}")
+    edges_dtime_rx = np.diff(edges_time_rx, prepend=edges_time_rx[0])
+    # Round delta times to nearest multiple of the bitrate, which
+    # we assume is the actual time sent on the transmitter timebase
+    edges_dtime_tx = np.round(edges_dtime_rx * bitrate) / bitrate
+    # Accumulate to get time on transmitter timebase
+    edges_time_tx = np.round(np.cumsum(edges_dtime_tx) + tstart, decimals=8)
 
 
     time1 = len(pcm) / fs + tstart
-    tin = [0.0, tstart] + list(edges_times) + [time1,]
-    tout = [0.0, tstart] + list(edges_times_r) + [time1,]
+    list_trx = [0.0, tstart] + list(edges_time_rx) + [time1,]
+    list_ttx = [0.0, tstart] + list(edges_time_tx) + [time1,]
 
-    # Function to convert actual time to desired sample time
-    #print(tin, tout)
-    logging.info(f"Found {len(edges_idx):d} zero crossings")
-
-    fsampletime = interpolate.interp1d(np.array(tout), np.array(tin), kind='linear')
+    logging.info(f"Found {len(edges_idx):d} symbol edges")
 
 
+    # Interpolate to get time on receiver timebase to sample the
+    # middle of a bit time
+    fsampletime = interpolate.interp1d(np.array(list_ttx), np.array(list_trx), kind='linear')
 
     nbits = len(pcm) // (fs / bitrate)
-    tbits2 = np.arange(nbits) * (1 / bitrate) + tstart
-    print(min(tbits), max(tbits2), len(tbits2))
+    tbits2 = np.arange(tstart, tstart + nbits / bitrate, 1/bitrate)
     tbits2 = fsampletime(tbits2) + (1 / (bitrate*2))
-    print(min(tbits2), max(tbits2), len(tbits2))
     bits2 = fcorr(tbits2)
-    
 
+    if bplot:
+        axs3[2].plot(t1, corr, label='MF', **lineopts)
+        axs3[2].plot(tbits0, bits0, label='naive', **markeropts)
+        markeropts['marker'] = '+'
+        axs3[2].plot(tbits2, bits2, label='recovered', **markeropts)
+        axs3[2].legend()
+        axs3[2].grid(True)
+        axs3[2].set_title('Sample Matched Filter Waveform with Recovered Symbol Times')
 
-    axs3[2].plot(t1, corr, label='MF')
-    axs3[2].plot(tbits0, bits0, label='naive', **markeropts)
-    markeropts['marker'] = '+'
-    axs3[2].plot(tbits2, bits2, label='recovered', **markeropts)
-    axs3[2].legend()
-    axs3[2].grid(True)
-    axs3[2].set_title('Sample Matched Filter Waveform with Recovered Symbol Times')
+        plt.tight_layout()
 
-    plt.tight_layout()
+    # Convert bits analog waveform to actual array of bits. 
+    bits_d = [1 if x > 0 else 0 for x in bits2]
 
+    # Calculate presence of active signal at bit times.
+    active_db2 = f_active(t1)
+    data_db2 = f_datasq(t1)
 
-    # Convert bits to actual array of bits
-    bits_d = bits > 0
-
-
-    #recover_timing(pcm, t1, fs)
-
-    plt.show()
-
-    
-
-    return None, None, None
+    return list(tbits2), bits_d, list(data_db2), list(active_db2), figures
 
 
 def schmitt_trigger(wfm):
@@ -404,10 +399,6 @@ def recover_timing(pcm, t1, fs):
     return fig1, axs1
 
 
-def autocorr(x):
-    result = np.correlate(x, x, mode='full')
-    return result[result.size//2:]
-
 def sampling_uncertainty(freqoffset, mf_func, tstart, fs, nsamples, bitrate):
     """ Measures the uncertainty of the bit sampling,
     defined as the distance from +-1 of bits.
@@ -439,38 +430,12 @@ def sample_bits0(freqoffset, mf_func, tstart, fs, nsamples, bitrate):
     """
     bitrate1 = bitrate + freqoffset
     nbits = nsamples // (fs / bitrate1)
-    tbits = np.arange(nbits) * (1 / bitrate1) + tstart
+    tbits = np.arange(tstart, nbits / bitrate1 + tstart, 1/bitrate1)
     bits = mf_func(tbits)
     return tbits, bits
 
 
 
-
-def sample_bits0(freqoffset, mf_func, tstart, fs, nsamples, bitrate):
-    """
-    Perform symbol timing recovery
-
-    Sample the bits out of an array at the given bitrate.
-
-    Given a matched filter decision array with values between 1 and 0
-    sample the array at the given sampling parameters
-    mf_func is an interpolating function based on a matched filter output
-    fs is sampling rate in Hz of the input waveform
-    tstart is the time to start sampling in the input waveform
-    nsamples is number of samples in the input waveform
-    bitrate is the number of bits per second to output
-    freqoffset is the frequency offset in Hz between the transmitter and
-    receiver. a value > 0 means the oscillator of the transmitter system
-    is biased faster than the oscillator of the receiver system
-    """
-
-    
-
-    bitrate1 = bitrate + freqoffset
-    nbits = nsamples // (fs / bitrate1)
-    tbits = np.arange(nbits) * (1 / bitrate1) + tstart
-    bits = mf_func(tbits)
-    return tbits, bits
 
 ###################################################################################
 #                         ZERO CROSSING IDENTIFICATION                            #
@@ -489,7 +454,7 @@ def zerocrossings(data, mindist=100):
     # <= 0 so that if it lands on zero, it isn't missed.
     # the 2nd one will be thrown out by the min distance parameter
     idx_signchange = np.nonzero(data[:-1] * data[1:] <= 0)
-    logging.info("signchange shape: " + str(idx_signchange[0].shape))
+    #logging.info("signchange shape: " + str(idx_signchange[0].shape))
     prevchange = np.diff(idx_signchange[0], prepend=idx_signchange[0][0]-mindist)
     # Keep only changes that are far enough apart from previous sign change
     idx_keep = np.nonzero(prevchange >= mindist)

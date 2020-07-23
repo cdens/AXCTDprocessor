@@ -29,7 +29,9 @@
 import argparse
 import logging
 import sys
+import os
 
+import matplotlib.pyplot as plt
 import numpy as np
 from scipy.io import wavfile #for wav file reading
 
@@ -40,10 +42,11 @@ import demodulateAXCTD, parseAXCTDframes
 #                               AXCTD PROCESSING DRIVER                           #
 ###################################################################################
 
-def processAXCTD(inputfile, outputfile):
-    
-    fromAudio = True
-    
+def processAXCTD(inputfile, outputdir, plot=False, fromAudio=True):
+
+    outputfile = os.path.join(outputdir, 'output.txt')
+    demodfile = os.path.join(outputdir, 'demodbitstream.txt')
+
     if fromAudio:
         #reading WAV file
         print("[+] Reading audio file")
@@ -66,17 +69,20 @@ def processAXCTD(inputfile, outputfile):
         
         logging.info("Demodulating audio")
         #demodulating PCM data
-        bitstream, times, p7500 = demodulateAXCTD.demodulateAXCTD(audiostream, fs)
-        
+        times, bitstream, signallevel, p7500, figures = demodulateAXCTD.demodulate_axctd(audiostream, fs, plot)
+
+        if plot:
+            plt.show()
+
         #writing test output data to file
-        with open('testfiles/demodbitstream.txt','w') as f:
-            for b,t,p in zip(bitstream,times,p7500):
-                f.write(f"{b},{t},{p}\n")
+        with open(demodfile, 'wt') as f:
+            for t, b, sig, prof in zip(times, bitstream, signallevel, p7500):
+                f.write(f"{b},{t:0.6f},{prof:0.3f},{sig:0.3f}\n")
     else:
         bitstream = []
         times = []
         p7500 = []
-        with open('testfiles/demodbitstream.txt') as f:
+        with open(demodbitstream, 'rt') as f:
             for line in f:
                 line = line.strip().split(',')
                 bitstream.append(int(line[0]))
@@ -90,10 +96,10 @@ def processAXCTD(inputfile, outputfile):
     T,C,S,z = parseAXCTDframes.parseBitstreamToProfile(bitstream, times, p7500)
     
     #writing CTD data to ASCII file
-    print("[+] Writing AXCTD data to file")
-    with open(outputfile, "w") as f:
+    print("[+] Writing AXCTD data to " + outputfile)
+    with open(outputfile, "wt") as f:
         f.write("Depth (m)\tTemperature (C)\tConductivity (mS/cm)\tSalinity (PSU)\n")
-        for (ct,cc,cs,cz) in zip(T,C,S,z):
+        for (ct, cc, cs, cz) in zip(T, C, S, z):
             f.write(f"{cz:6.1f}\t\t{ct:6.2f}\t\t{cc:6.2f}\t\t{cs:6.2f}\n")
 
 
@@ -109,8 +115,8 @@ def processAXCTD(inputfile, outputfile):
 def main():
     parser = argparse.ArgumentParser(description='Demodulate an audio file to text')
     parser.add_argument('-i', '--input', default='testfiles/sample_full.wav')
-    parser.add_argument('-o', '--output', default='testfiles/output.txt')
-
+    parser.add_argument('-o', '--output', default='testfiles', help='output directory')
+    parser.add_argument('--plot', action="store_true", help='Show plots')
     parser.add_argument('-v', '--verbose', action='store_true', help='Enable verbose output')
 
     args = parser.parse_args()
@@ -118,23 +124,16 @@ def main():
     loglevel = logging.DEBUG if args.verbose else logging.INFO
     logging.basicConfig(level=loglevel, stream=sys.stdout)
 
-    return processAXCTD(args.input, args.output)
+    if not os.path.exists(args.output):
+        os.makedirs(args.output)
+
+
+    return processAXCTD(args.input, args.output, plot=args.plot)
 
 
 #MAIN
 if __name__ == "__main__":
     main()
-
-
-
-
-
-
-
-
-
-
-
 
 
 
