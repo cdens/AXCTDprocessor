@@ -207,26 +207,29 @@ def demodulate_axctd(pcmin, fs, bplot=True):
 
     # downsample and lowpass filter
     f600hz = np.exp(2*np.pi*1j*fc*t1) * f_datasq(t1)
-    sos400 = signal.butter(6, 400, btype='lowpass', fs=fs, output='sos')
+    # TODO: make the downsampling filter frequency
+    sos400 = signal.butter(6, 350, btype='lowpass', fs=fs, output='sos')
     pcmiq = signal.sosfilt(sos400, f600hz * pcmlow)
     pcmiq /= np.max(np.abs(pcmiq))
     pcmiq *= f_datasq(t1)
 
     # Perform matched filtering with complex IQ data
     # TODO: I can probably downsample by a factor of 4 (from 44 KHz to 11 KHz)
+    decimate = 1
     kernel_len = fs // bitrate
     tkern = np.arange(0.0, kernel_len/bitrate, 1.0/bitrate)
     y1 = np.exp(2*np.pi*1j*(f1-fc)*tkern)
-    corr_f1 = np.abs(signal.correlate(pcmiq, y1, mode='same'))
+    corr_f1 = np.abs(signal.correlate(pcmiq[::decimate], y1[::decimate], mode='same'))
+    # Can we figure out if there's a frequency offset?
     y2 = np.exp(2*np.pi*1j*(f2-fc)*tkern)
-    corr_f2 = np.abs(signal.correlate(pcmiq, y2, mode='same'))
+    corr_f2 = np.abs(signal.correlate(pcmiq[::decimate], y2[::decimate], mode='same'))
     corr_f1 /= np.max(corr_f1)
     corr_f2 /= np.max(corr_f2)
 
     corr = corr_f1 - corr_f2
-    fcorr = interpolate.interp1d(t1, corr, fill_value=0.0, bounds_error=False)
+    fcorr = interpolate.interp1d(t1[::decimate], corr, fill_value=0.0, bounds_error=False)
 
-    args = (fcorr, tstart, fs, len(corr), bitrate)
+    args = (fcorr, tstart, fs, len(pcm), bitrate)
     tbits0, bits0 = sample_bits0(0.0, *args)
 
     lineopts = {'linewidth': 0.75}
@@ -235,7 +238,7 @@ def demodulate_axctd(pcmin, fs, bplot=True):
     if bplot:
         fig3, axs3 = plt.subplots(3, 1, sharex=True)
         figures.append(fig3)
-        axs3[0].plot(t1, corr, label='dcorrelation', **lineopts)
+        axs3[0].plot(t1[::decimate], corr, label='dcorrelation', **lineopts)
         axs3[0].plot(tbits0, bits0, **markeropts)
         axs3[0].grid(True)
         #axs2[1].legend()
@@ -244,13 +247,14 @@ def demodulate_axctd(pcmin, fs, bplot=True):
 
     # lowpass filter?
 
-    corr_d = schmitt_trigger(corr, fast=False)
-    fcorr_d = interpolate.interp1d(t1, corr_d)
-    args = (fcorr_d, tstart, fs, len(corr), bitrate)
-    tbits, bits = sample_bits0(0.0, *args)
+    # edge-filtered
+    corr_d = schmitt_trigger(corr, fast=True)
+    fcorr_d = interpolate.interp1d(t1[::decimate], corr_d)
 
     if bplot:
-        axs3[1].plot(t1, corr_d, label='dcorr_d', **lineopts)
+        args = (fcorr_d, tstart, fs, len(pcm), bitrate)
+        tbits, bits = sample_bits0(0.0, *args)
+        axs3[1].plot(t1[::decimate], corr_d, label='dcorr_d', **lineopts)
         axs3[1].plot(tbits, bits, **markeropts)
         axs3[1].grid(True)
         #axs2[1].legend()
@@ -259,18 +263,11 @@ def demodulate_axctd(pcmin, fs, bplot=True):
 
     # Extract bit transition times from here
 
-    #diff_corr_d = np.diff(corr_d)
-    #edges_idx = np.argwhere(np.abs(diff_corr_d) > 0.5)
-
     # Consider edges within 1/4 symbol of each other as
     # false spurious edges
-    mindist = int(np.round(fs * (0.25 / bitrate)))
+    mindist = int(np.round(fs / decimate * (0.25 / bitrate)))
     edges_idx = zerocrossings(corr_d, mindist=mindist)
     # snap edge times to nearest actual time
-    # (this doesn't seem like it will work)
-    tin = [0.0, tstart]
-    tout = [0.0, tstart]
-
     # Get the times of each edge as seen by the receiver
     edges_time_rx = [float(idx / fs) + tstart for idx in edges_idx]
     # Get delta timestamp to previous edge
@@ -299,7 +296,7 @@ def demodulate_axctd(pcmin, fs, bplot=True):
     bits2 = fcorr(tbits2)
 
     if bplot:
-        axs3[2].plot(t1, corr, label='MF', **lineopts)
+        axs3[2].plot(t1[::decimate], corr, label='MF', **lineopts)
         axs3[2].plot(tbits0, bits0, label='naive', **markeropts)
         markeropts['marker'] = '+'
         axs3[2].plot(tbits2, bits2, label='recovered', **markeropts)
@@ -311,6 +308,11 @@ def demodulate_axctd(pcmin, fs, bplot=True):
 
     # Convert bits analog waveform to actual array of bits. 
     bits_d = [1 if x > 0 else 0 for x in bits2]
+
+    # For QC, calculate how far things are from 0
+    # a higher q factor means decoding is better
+    qfactor = np.sqrt(np.mean((bits2*2) ** 2))
+    logging.info(f"qfactor = {qfactor:0.3f}")
 
     # Calculate presence of active signal at bit times.
     active_db2 = f_active(t1)
