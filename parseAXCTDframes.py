@@ -157,8 +157,6 @@ def generateMasks():
 #  RUN ECC CHECK ON FRAME WITH MASKS CREATED IN GENERATEMASKS()
 def checkECC(frame, masks):
 
-    isValid = True
-    
     if sum(frame)%2 != 0: #if parity isn't even
         return False
         
@@ -168,13 +166,11 @@ def checkECC(frame, masks):
     for (bitMasks, bit) in zip(masks, ecc): #checking masks for each ECC bit
         for mask in bitMasks: #loops through all 8 masks for each bit
             if (sum(data*mask) + bit)%2 != 0:
-                isValid = False
+                return False # isValid = False
     
-    return isValid
+    return True #isValid
 
 
-    
-    
 
 ###################################################################################
 #          FRAME CONVERSION TO TEMPERATURE/CONDUCTIVITY/SALINITY/DEPTH            #
