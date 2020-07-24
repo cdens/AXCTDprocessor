@@ -149,7 +149,8 @@ def demodulate_axctd(pcmin, fs, bplot=True):
 
     # Use bandpass filter to extract digital data only
     #sos = signal.butter(6, [f1 * 0.5, f2 * 1.5], btype='bandpass', fs=fs, output='sos')
-    sos = signal.butter(6, 1200, btype='lowpass', fs=fs, output='sos')
+    sos = signal.butter(6, [5, 1200], btype='bandpass', fs=fs, output='sos')
+    #sos = signal.butter(6, 1200, btype='lowpass', fs=fs, output='sos')
     pcmlow = signal.sosfilt(sos, pcm)
 
     figures = []
@@ -189,7 +190,7 @@ def demodulate_axctd(pcmin, fs, bplot=True):
     f_datasq = interpolate.interp1d(t2, data_db, bounds_error=False, fill_value=0)
     f_active = interpolate.interp1d(t2, active_db, bounds_error=False, fill_value=0)
 
-    if bplot:
+    if False and bplot:
         fig1, axs = plt.subplots(2, 1, sharex=True)
         figures.append(fig1)
 
@@ -202,24 +203,25 @@ def demodulate_axctd(pcmin, fs, bplot=True):
     # Investigate complex IQ demodulation
 
     fc = (f1 + f2) / 2
-    # convert original lowpassed signal to complex domain IQ, centered atfc
+    # convert original lowpassed signal to complex domain IQ, centered at fc
 
+    # downsample and lowpass filter
     f600hz = np.exp(2*np.pi*1j*fc*t1) * f_datasq(t1)
     sos400 = signal.butter(6, 400, btype='lowpass', fs=fs, output='sos')
     pcmiq = signal.sosfilt(sos400, f600hz * pcmlow)
-    #pcmiq = f600hz * pcmlow
     pcmiq /= np.max(np.abs(pcmiq))
     pcmiq *= f_datasq(t1)
 
     # Perform matched filtering with complex IQ data
+    # TODO: I can probably downsample by a factor of 4 (from 44 KHz to 11 KHz)
     kernel_len = fs // bitrate
     tkern = np.arange(0.0, kernel_len/bitrate, 1.0/bitrate)
     y1 = np.exp(2*np.pi*1j*(f1-fc)*tkern)
     corr_f1 = np.abs(signal.correlate(pcmiq, y1, mode='same'))
     y2 = np.exp(2*np.pi*1j*(f2-fc)*tkern)
     corr_f2 = np.abs(signal.correlate(pcmiq, y2, mode='same'))
-    corr_f1 /= np.max(np.abs(corr_f1))
-    corr_f2 /= np.max(np.abs(corr_f2))
+    corr_f1 /= np.max(corr_f1)
+    corr_f2 /= np.max(corr_f2)
 
     corr = corr_f1 - corr_f2
     fcorr = interpolate.interp1d(t1, corr, fill_value=0.0, bounds_error=False)
