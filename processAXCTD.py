@@ -126,7 +126,7 @@ def main():
 
     if not os.path.exists(args.output):
         os.makedirs(args.output)
-
+    np.set_printoptions(precision=4)
 
     return processAXCTD(args.input, args.output, plot=args.plot)
 
