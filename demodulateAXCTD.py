@@ -125,28 +125,36 @@ def demodulateAXCTD0(pcm, fs):
 
 def demodulate_axctd(pcmin, fs, bplot=True):
 
+    # Change these variables to allow partial file processing for debugging
     tstart = 0.01
     istart = int(fs * tstart)
-    iend = len(pcmin) #// 8 #102400
+    iend = len(pcmin) // 8
 
 
     #basic configuration
-    dt = 1/fs
     f1 = 400 # bit 1 (mark) = 400 Hz
     f2 = 800 # bit 0 (space) = 800 Hz
     bitrate = 800 #symbol rate = 800 Hz
     fprof = 7500 #7500 Hz signal associated with active profile data transmission
+    squelch_snr = 10.0 # db
 
+    # Basic signal accounting information
+    dt = 1/fs
+    len_pcm = iend - istart # number of samples
+    sig_time = len_pcm * dt # signal time duration
+    sig_endtime = tstart + sig_time
 
+    assert istart < iend
     # Normalize amplitude/DC offset of audio signal
-    pcm = pcmin[istart:iend] - np.mean(pcmin[istart:iend])
-    pcm *= 1.0 / np.max(np.abs(pcm))
+    pcm_dc = np.mean(pcmin[istart:iend])
+    pcm_ampl = np.max(np.abs(pcmin[istart:iend]))
+    pcm = (pcmin[istart:iend] - pcm_dc) / pcm_ampl
     logging.info("PCM signal length: {:d} samples, {:0.3f} seconds"
-                 "".format(len(pcm), len(pcm) / fs))
+                 "".format(len_pcm, sig_time))
 
 
-    t1 = np.arange(tstart, len(pcm) / fs + tstart, dt)
-
+    t1 = np.arange(tstart, sig_endtime, dt)
+    # TODO: make this filter configurable
     # Use bandpass filter to extract digital data only
     #sos = signal.butter(6, [f1 * 0.5, f2 * 1.5], btype='bandpass', fs=fs, output='sos')
     sos = signal.butter(6, [5, 1200], btype='bandpass', fs=fs, output='sos')
@@ -164,7 +172,7 @@ def demodulate_axctd(pcmin, fs, bplot=True):
         nperseg =  nfft // 2
         noverlap = 0
         f, t, Sxx = signal.spectrogram(pcmlow, fs=fs, nfft=nfft, nperseg=nperseg, noverlap=noverlap) #fs // bitrate)
-        logging.info("Spectrogram size: " + str(Sxx.shape))
+        logging.debug("Spectrogram size: " + str(Sxx.shape))
 
         for ii, nfreqs in enumerate((256, len(f) // 2)):
             axs2[ii].pcolormesh(t + tstart, f[0:nfreqs], 10*np.log10(Sxx[0:nfreqs, :]), shading='gouraud')
@@ -172,7 +180,7 @@ def demodulate_axctd(pcmin, fs, bplot=True):
             axs2[ii].set_xlabel('Time [sec]')
 
 
-    t2, data_db, active_db = signal_levels(pcm, fs=fs)
+    t2, data_db, active_db = signal_levels(pcm, fs=fs, fprof=fprof)
     t2 += tstart
 
     if bplot:
@@ -190,31 +198,90 @@ def demodulate_axctd(pcmin, fs, bplot=True):
     f_datasq = interpolate.interp1d(t2, data_db, bounds_error=False, fill_value=0)
     f_active = interpolate.interp1d(t2, active_db, bounds_error=False, fill_value=0)
 
-    if False and bplot:
+    pcm_sq = pcmlow * (f_datasq(t1) > squelch_snr)
+
+    if bplot:
         fig1, axs = plt.subplots(2, 1, sharex=True)
         figures.append(fig1)
 
-        axs[0].plot(t1, pcmlow * (f_datasq(t1) > 10.0))
+        axs[0].plot(t1, pcm_sq)
         axs[0].set_title('Digital data (squelched)')
         axs[0].grid(True)
+
+        axs[1].plot(t1, f_datasq(t1))
+        axs[1].plot(t1, 50*(f_datasq(t1) > squelch_snr))
         plt.tight_layout()
 
     logging.debug("Done filtering")
-    # Investigate complex IQ demodulation
+    # Perform complex IQ downconversion, demodulation
 
     fc = (f1 + f2) / 2
     # convert original lowpassed signal to complex domain IQ, centered at fc
 
-    # downsample and lowpass filter
-    f600hz = np.exp(2*np.pi*1j*fc*t1) * f_datasq(t1)
-    # TODO: make the downsampling filter frequency
-    sos400 = signal.butter(6, 350, btype='lowpass', fs=fs, output='sos')
-    pcmiq = signal.sosfilt(sos400, f600hz * pcmlow)
+    # downconvert and lowpass filter
+    fcarrier = np.exp(2*np.pi*1j*fc*t1) * f_datasq(t1)
+    # TODO: make the downconversion filter frequency configurable
+    sosdcx = signal.butter(6, fc*0.6, btype='lowpass', fs=fs, output='sos')
+    pcmiq = signal.sosfilt(sosdcx, fcarrier * pcmlow)
     pcmiq /= np.max(np.abs(pcmiq))
     pcmiq *= f_datasq(t1)
 
+
+
+
+
+    fftopts = {'fs': fs, 'nfft': 16384, 'scaling': 'spectrum', 'return_onesided': False}
+
+    f, Pxx = signal.periodogram(pcmlow, **fftopts)
+    print(max(pcm_sq), min(pcm_sq))
+    print(f)
+    print(Pxx)
+    print(np.max(np.abs(Pxx)))
+    if bplot:
+        fig4, axs4 = plt.subplots(3, 1)
+        figures.append(fig4)
+        # Show unfiltered PSD of original using periodogram
+        half = len(f) // 2
+        axs4[1].plot(f[0:], 10*np.log10(Pxx[0:]), label='pcmlow')
+        axs4[1].set_xlabel('Frequency [Hz]')
+        axs4[1].set_ylabel('PSD [dB/Hz]')
+        axs4[1].grid(True)
+
+        # Show unfiltered PSD of downconverted using periodogram
+        #f, Pxx = signal.periodogram(fcarrier*pcmlow, **fftopts)
+        #axs4[1].plot(f[0:], 10*np.log10(Pxx[0:]), label='dcx')
+        #axs4[1].set_xlabel('Frequency [Hz]')
+        #axs4[1].set_ylabel('PSD [dB/Hz]')
+        #axs4[1].grid(True)
+        #axs4[1].legend()
+
+        # overlay low pass filter
+        w, h = signal.sosfreqz(sos, fs=fs, worN=f)
+        axs4[1].plot(w, 20 * np.log10(np.abs(h + 1e-50)))
+        #axs4[2].set_title('Butterworth filter frequency response')
+        #axs4[2].set_xlabel('Frequency [Hz]')
+        #axs4[2].set_ylabel('Amplitude [dB]')
+        #axs4[2].margins(0, 0.1)
+        #axs4[2].grid(which='both', axis='both')
+        axs4[1].axvline(1200, color='green') # cutoff frequency
+        plt.tight_layout()
+
+        # overlay low pass filter
+        #f, Pxx = signal.periodogram(pcmiq, **fftopts)
+        #axs4[2].plot(f[0:], 10*np.log10(Pxx[0:]))
+        #w, h = signal.sosfreqz(sosdcx, fs=fs, worN=f)
+        #axs4[2].plot(w, 20 * np.log10(np.abs(h + 1e-50)))
+        #axs4[2].set_title('Butterworth filter frequency response')
+        #axs4[2].set_xlabel('Frequency [Hz]')
+        #axs4[2].set_ylabel('Amplitude [dB]')
+        #axs4[2].margins(0, 0.1)
+        #axs4[2].grid(which='both', axis='both')
+        plt.tight_layout()
+
+
     # Perform matched filtering with complex IQ data
     # TODO: I can probably downsample by a factor of 4 (from 44 KHz to 11 KHz)
+    # this doesn't seem to work yet
     decimate = 1
     kernel_len = fs // bitrate
     tkern = np.arange(0.0, kernel_len/bitrate, 1.0/bitrate)
@@ -226,16 +293,18 @@ def demodulate_axctd(pcmin, fs, bplot=True):
     corr_f1 /= np.max(corr_f1)
     corr_f2 /= np.max(corr_f2)
 
-    corr = corr_f1 - corr_f2
+
+
+    corr = corr_f2 - corr_f1
     fcorr = interpolate.interp1d(t1[::decimate], corr, fill_value=0.0, bounds_error=False)
 
-    args = (fcorr, tstart, fs, len(pcm), bitrate)
-    tbits0, bits0 = sample_bits0(0.0, *args)
-
-    lineopts = {'linewidth': 0.75}
-    markeropts = {'marker':'x', 'linewidth': 0}
-
     if bplot:
+        args = (fcorr, tstart, fs, len_pcm, bitrate)
+        tbits0, bits0 = sample_bits(0.0, *args)
+
+        lineopts = {'linewidth': 0.75}
+        markeropts = {'marker':'x', 'linewidth': 0}
+
         fig3, axs3 = plt.subplots(3, 1, sharex=True)
         figures.append(fig3)
         axs3[0].plot(t1[::decimate], corr, label='dcorrelation', **lineopts)
@@ -245,19 +314,17 @@ def demodulate_axctd(pcmin, fs, bplot=True):
         axs3[0].set_xlabel('Time [sec]')
         axs3[0].set_title('Sample Matched Filter Waveform Naively')
 
-    # lowpass filter?
 
     # edge-filtered
     corr_d = schmitt_trigger(corr, fast=True)
-    fcorr_d = interpolate.interp1d(t1[::decimate], corr_d)
 
     if bplot:
-        args = (fcorr_d, tstart, fs, len(pcm), bitrate)
-        tbits, bits = sample_bits0(0.0, *args)
+        fcorr_d = interpolate.interp1d(t1[::decimate], corr_d, kind='linear', copy=False)
+        args = (fcorr_d, tstart, fs, len_pcm, bitrate)
+        tbits, bits = sample_bits(0.0, *args)
         axs3[1].plot(t1[::decimate], corr_d, label='dcorr_d', **lineopts)
         axs3[1].plot(tbits, bits, **markeropts)
         axs3[1].grid(True)
-        #axs2[1].legend()
         axs3[1].set_title('Apply Schmitt Trigger Edge Filter')
         axs3[1].set_xlabel('Time [sec]')
 
@@ -266,31 +333,38 @@ def demodulate_axctd(pcmin, fs, bplot=True):
     # Consider edges within 1/4 symbol of each other as
     # false spurious edges
     mindist = int(np.round(fs / decimate * (0.25 / bitrate)))
+    logging.debug(f"edge max {mindist:0.6f}")
+
     edges_idx = zerocrossings(corr_d, mindist=mindist)
+    logging.info(f"Found {len(edges_idx):d} symbol edges")
     # snap edge times to nearest actual time
     # Get the times of each edge as seen by the receiver
-    edges_time_rx = [float(idx / fs) + tstart for idx in edges_idx]
+    edges_time_rx = [idx * decimate * dt + tstart for idx in edges_idx]
+    logging.debug(f"edge max {np.max(edges_time_rx):0.2f}")
     # Get delta timestamp to previous edge
     edges_dtime_rx = np.diff(edges_time_rx, prepend=edges_time_rx[0])
     # Round delta times to nearest multiple of the bitrate, which
     # we assume is the actual time sent on the transmitter timebase
     edges_dtime_tx = np.round(edges_dtime_rx * bitrate) / bitrate
     # Accumulate to get time on transmitter timebase
-    edges_time_tx = np.round(np.cumsum(edges_dtime_tx) + tstart, decimals=8)
+    # round gets rid of double precision float imprecision
+    edges_dtime_tx[0] += tstart
+    edges_time_tx = np.round(np.cumsum(edges_dtime_tx), decimals=8)
+
+    #logging.debug(f"edges_time_tx {edges_time_tx[0]:0.6f}")
+    #logging.debug(f"edges_time_tx {edges_time_tx[len(edges_time_tx)//2]:0.6f}")
+    #logging.debug(f"edges_time_tx {edges_time_tx[-1]:0.6f}")
 
 
-    time1 = len(pcm) / fs + tstart
-    list_trx = [0.0, tstart] + list(edges_time_rx) + [time1,]
-    list_ttx = [0.0, tstart] + list(edges_time_tx) + [time1,]
-
-    logging.info(f"Found {len(edges_idx):d} symbol edges")
+    edges_time_rx2 = np.hstack((0.0, tstart, edges_time_rx, sig_endtime))
+    edges_time_tx2 = np.hstack((0.0, tstart, edges_time_tx, sig_endtime))
 
 
     # Interpolate to get time on receiver timebase to sample the
     # middle of a bit time
-    fsampletime = interpolate.interp1d(np.array(list_ttx), np.array(list_trx), kind='linear')
+    fsampletime = interpolate.interp1d(edges_time_tx2, edges_time_rx2, kind='linear', copy=False)
 
-    nbits = len(pcm) // (fs / bitrate)
+    nbits = int(sig_time * bitrate)
     tbits2 = np.arange(tstart, tstart + nbits / bitrate, 1/bitrate)
     tbits2 = fsampletime(tbits2) + (1 / (bitrate*2))
     bits2 = fcorr(tbits2)
@@ -312,11 +386,32 @@ def demodulate_axctd(pcmin, fs, bplot=True):
     # For QC, calculate how far things are from 0
     # a higher q factor means decoding is better
     qfactor = np.sqrt(np.mean((bits2*2) ** 2))
-    logging.info(f"qfactor = {qfactor:0.3f}")
+    logging.info(f"demodulation quality: {qfactor:0.3f} / 1.000")
+
+    if bplot:
+        # Demodulation quality
+        #fig4, axs4 = plt.subplots(2, 1)
+        figures.append(fig4)
+
+        has_sig = np.nonzero(f_datasq(tbits2) > squelch_snr)
+
+        hsig, bin_edges = np.histogram(bits2[has_sig], bins=100)
+        x = (bin_edges[0:-1] + np.diff(bin_edges) / 2)
+        f = (x + 0.5) * (f2 - f1) + f1
+        axs4[0].plot(x*2, hsig)
+        axs4[0].set_xlabel('Matched Filter Output')
+        axs4[0].set_ylabel('Count')
+        axs4[0].grid(True)
+        axs4[0].set_title('Demodulation Quality')
+        plt.tight_layout()
+
 
     # Calculate presence of active signal at bit times.
     active_db2 = f_active(t1)
     data_db2 = f_datasq(t1)
+
+    if bplot:
+        pass #fig3.clear()
 
     return list(tbits2), bits_d, list(data_db2), list(active_db2), figures
 
@@ -338,7 +433,7 @@ def schmitt_trigger(wfm, fast=False):
 
 
 
-def signal_levels(pcm, fs, minratio=2.0):
+def signal_levels(pcm, fs, fprof, minratio=2.0):
     """ 
     Determine whether a signal has power by examining
     the ratio of powers in relevant bands.
@@ -358,7 +453,7 @@ def signal_levels(pcm, fs, minratio=2.0):
     dt = np.mean(np.diff(t))
     logging.info("Spectrogram size: {:s}, dt={:0.4f} f=[{:0.2f},{:0.2f})"
                 "".format(str(Sxx.shape), dt, min(f), max(f) ))
-    
+
     # Get the indices that represent each band, using bw of about 700 hz
     bw2 = 400.0
     band_fc = [600,         # digital data band
@@ -384,38 +479,10 @@ def signal_levels(pcm, fs, minratio=2.0):
 
 
 
-def recover_timing(pcm, t1, fs):
-    """ Return a function that maps receiver time to transmitter time
-    based on waveform
-    """
-
-    # make 7000-8000 bandpass filter for pilot tone
-    sos = signal.butter(6, [100, 1200], btype='bandpass', fs=fs, output='sos')
-    pcm2 = signal.sosfilt(sos, pcm)
-    pcm2 /= np.max(np.abs(pcm2))
-    fig1, axs1 = plt.subplots(2, 1, sharex=True)
-
-    plt.plot(t1, pcm2)
-
-    return fig1, axs1
 
 
-def sampling_uncertainty(freqoffset, mf_func, tstart, fs, nsamples, bitrate):
-    """ Measures the uncertainty of the bit sampling,
-    defined as the distance from +-1 of bits.
-
-    i.e., bits that are closer to 0 are more uncertain
-    """
-    _, bits = sample_bits0(freqoffset, mf_func, tstart, fs, nsamples, bitrate)
-    #d = np.mean(np.power(1.0 - np.abs(bits), 4))
-    d = np.mean(1.0 - np.abs(bits))
-    return d
-
-
-
-
-def sample_bits0(freqoffset, mf_func, tstart, fs, nsamples, bitrate):
-    """
+def sample_bits(freqoffset, mf_func, tstart, fs, nsamples, bitrate):
+    """ 
     Sample the bits out of an array at the given bitrate.
 
     Given a matched filter decision array with values between 1 and 0
@@ -442,15 +509,11 @@ def sample_bits0(freqoffset, mf_func, tstart, fs, nsamples, bitrate):
 #                         ZERO CROSSING IDENTIFICATION                            #
 ###################################################################################
 
-def gen_edges(data, i0):
-    """ Generate zero crossings """
-    pass
-
 def zerocrossings(data, mindist=100):
     """ Get all zero crossings, but filter out consecutive crossings
     that are within mindist samples of previous crossings.
+    TODO: sub-sample interpolation of zero crossings?
     """
-
 
     # <= 0 so that if it lands on zero, it isn't missed.
     # the 2nd one will be thrown out by the min distance parameter
@@ -497,8 +560,6 @@ def getnextncrossings(data, ncrossings, minind):
             
 
     
-    
-    
 ###################################################################################
 #                                   BOX SMOOTHER                                  #
 ###################################################################################
@@ -509,5 +570,4 @@ def boxSmooth(y, npts):
     return np.convolve(y, box, mode='same')
     
     
-    
-    
+
