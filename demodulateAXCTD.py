@@ -128,7 +128,7 @@ def demodulate_axctd(pcmin, fs, bplot=True):
     # Change these variables to allow partial file processing for debugging
     tstart = 0.01
     istart = int(fs * tstart)
-    iend = len(pcmin) // 8
+    iend = len(pcmin) // 16
 
 
     #basic configuration
@@ -157,8 +157,8 @@ def demodulate_axctd(pcmin, fs, bplot=True):
     # TODO: make this filter configurable
     # Use bandpass filter to extract digital data only
     #sos = signal.butter(6, [f1 * 0.5, f2 * 1.5], btype='bandpass', fs=fs, output='sos')
-    sos = signal.butter(6, [5, 1200], btype='bandpass', fs=fs, output='sos')
-    #sos = signal.butter(6, 1200, btype='lowpass', fs=fs, output='sos')
+    #sos = signal.butter(6, [5, 1200], btype='bandpass', fs=fs, output='sos')
+    sos = signal.butter(6, 1200, btype='lowpass', fs=fs, output='sos')
     pcmlow = signal.sosfilt(sos, pcm)
 
     figures = []
@@ -198,7 +198,8 @@ def demodulate_axctd(pcmin, fs, bplot=True):
     f_datasq = interpolate.interp1d(t2, data_db, bounds_error=False, fill_value=0)
     f_active = interpolate.interp1d(t2, active_db, bounds_error=False, fill_value=0)
 
-    pcm_sq = pcmlow * (f_datasq(t1) > squelch_snr)
+    squelch_mask_t1 = (f_datasq(t1) > squelch_snr)
+    pcm_sq = pcmlow * squelch_mask_t1
 
     if bplot:
         fig1, axs = plt.subplots(2, 1, sharex=True)
@@ -209,7 +210,7 @@ def demodulate_axctd(pcmin, fs, bplot=True):
         axs[0].grid(True)
 
         axs[1].plot(t1, f_datasq(t1))
-        axs[1].plot(t1, 50*(f_datasq(t1) > squelch_snr))
+        axs[1].plot(t1, 50*squelch_mask_t1)
         plt.tight_layout()
 
     logging.debug("Done filtering")
@@ -219,12 +220,12 @@ def demodulate_axctd(pcmin, fs, bplot=True):
     # convert original lowpassed signal to complex domain IQ, centered at fc
 
     # downconvert and lowpass filter
-    fcarrier = np.exp(2*np.pi*1j*fc*t1) * f_datasq(t1)
+    fcarrier = np.exp(2*np.pi*1j*fc*t1)
     # TODO: make the downconversion filter frequency configurable
     sosdcx = signal.butter(6, fc*0.6, btype='lowpass', fs=fs, output='sos')
     pcmiq = signal.sosfilt(sosdcx, fcarrier * pcmlow)
     pcmiq /= np.max(np.abs(pcmiq))
-    pcmiq *= f_datasq(t1)
+    pcmiq *= squelch_mask_t1
 
 
 
@@ -233,6 +234,7 @@ def demodulate_axctd(pcmin, fs, bplot=True):
     fftopts = {'fs': fs, 'nfft': 16384, 'scaling': 'spectrum', 'return_onesided': False}
 
     f, Pxx = signal.periodogram(pcmlow, **fftopts)
+    Pxx /= np.max(Pxx)
     print(max(pcm_sq), min(pcm_sq))
     print(f)
     print(Pxx)
@@ -240,42 +242,50 @@ def demodulate_axctd(pcmin, fs, bplot=True):
     if bplot:
         fig4, axs4 = plt.subplots(3, 1)
         figures.append(fig4)
+
+
+        dbeps = 1e-9
         # Show unfiltered PSD of original using periodogram
         half = len(f) // 2
-        axs4[1].plot(f[0:], 10*np.log10(Pxx[0:]), label='pcmlow')
+        axs4[1].plot(f, 10*np.log10(Pxx + dbeps), label='pcmlow')
         axs4[1].set_xlabel('Frequency [Hz]')
         axs4[1].set_ylabel('PSD [dB/Hz]')
         axs4[1].grid(True)
 
+        # frequencies for filter
+        fh = np.linspace(-fs/4, fs/4, fftopts['nfft'])
+
         # Show unfiltered PSD of downconverted using periodogram
-        #f, Pxx = signal.periodogram(fcarrier*pcmlow, **fftopts)
-        #axs4[1].plot(f[0:], 10*np.log10(Pxx[0:]), label='dcx')
-        #axs4[1].set_xlabel('Frequency [Hz]')
-        #axs4[1].set_ylabel('PSD [dB/Hz]')
-        #axs4[1].grid(True)
-        #axs4[1].legend()
+        f, Pxx = signal.periodogram(fcarrier*pcmlow, **fftopts)
+        Pxx /= np.max(Pxx)
+        axs4[1].plot(f, 10*np.log10(Pxx + dbeps), label='dcx signal')
+        axs4[1].set_xlabel('Frequency [Hz]')
+        axs4[1].set_ylabel('PSD [dB/Hz]')
+        axs4[1].grid(True)
 
         # overlay low pass filter
-        w, h = signal.sosfreqz(sos, fs=fs, worN=f)
-        axs4[1].plot(w, 20 * np.log10(np.abs(h + 1e-50)))
+        w, h = signal.sosfreqz(sos, fs=fs, worN=fh)
+        axs4[1].plot(w, 20 * np.log10(np.abs(h) + dbeps), label='aa lpf')
+        axs4[1].legend()
         #axs4[2].set_title('Butterworth filter frequency response')
         #axs4[2].set_xlabel('Frequency [Hz]')
         #axs4[2].set_ylabel('Amplitude [dB]')
         #axs4[2].margins(0, 0.1)
         #axs4[2].grid(which='both', axis='both')
-        axs4[1].axvline(1200, color='green') # cutoff frequency
+        #axs4[1].axvline(1200, color='green') # cutoff frequency
         plt.tight_layout()
 
         # overlay low pass filter
-        #f, Pxx = signal.periodogram(pcmiq, **fftopts)
-        #axs4[2].plot(f[0:], 10*np.log10(Pxx[0:]))
-        #w, h = signal.sosfreqz(sosdcx, fs=fs, worN=f)
-        #axs4[2].plot(w, 20 * np.log10(np.abs(h + 1e-50)))
-        #axs4[2].set_title('Butterworth filter frequency response')
-        #axs4[2].set_xlabel('Frequency [Hz]')
-        #axs4[2].set_ylabel('Amplitude [dB]')
-        #axs4[2].margins(0, 0.1)
-        #axs4[2].grid(which='both', axis='both')
+        f, Pxx = signal.periodogram(np.real(pcmiq), **fftopts)
+        axs4[2].plot(f, 10*np.log10(Pxx + dbeps), label='dcx data')
+        w, h = signal.sosfreqz(sosdcx, fs=fs, worN=fh)
+        axs4[2].plot(w, 20 * np.log10(np.abs(h) + dbeps), label='dcx lpf')
+        axs4[2].set_title('Butterworth filter frequency response')
+        axs4[2].set_xlabel('Frequency [Hz]')
+        axs4[2].set_ylabel('Amplitude [dB]')
+        axs4[2].margins(0, 0.1)
+        axs4[2].grid(which='both', axis='both')
+        axs4[2].legend()
         plt.tight_layout()
 
 
@@ -391,13 +401,13 @@ def demodulate_axctd(pcmin, fs, bplot=True):
     if bplot:
         # Demodulation quality
         #fig4, axs4 = plt.subplots(2, 1)
-        figures.append(fig4)
+        #figures.append(fig4)
 
         has_sig = np.nonzero(f_datasq(tbits2) > squelch_snr)
 
         hsig, bin_edges = np.histogram(bits2[has_sig], bins=100)
         x = (bin_edges[0:-1] + np.diff(bin_edges) / 2)
-        f = (x + 0.5) * (f2 - f1) + f1
+        #f = (x + 0.5) * (f2 - f1) + f1
         axs4[0].plot(x*2, hsig)
         axs4[0].set_xlabel('Matched Filter Output')
         axs4[0].set_ylabel('Count')
