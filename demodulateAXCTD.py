@@ -128,7 +128,7 @@ def demodulate_axctd(pcmin, fs, plot=False):
     # Change these variables to allow partial file processing for debugging
     tstart = 0.01
     istart = int(fs * tstart)
-    iend = len(pcmin) // 2
+    iend = len(pcmin)
 
 
     #basic configuration

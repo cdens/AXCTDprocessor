@@ -72,13 +72,18 @@ def processAXCTD(inputfile, outputdir, plot=False, fromAudio=True):
         times, bitstream, signallevel, p7500, figures = \
               demodulateAXCTD.demodulate_axctd(audiostream, fs, plot=plot)
 
-        if plot:
-            plt.show()
 
         #writing test output data to file
         with open(demodfile, 'wt') as f:
             for t, b, sig, prof in zip(times, bitstream, signallevel, p7500):
                 f.write(f"{b},{t:0.6f},{prof:0.3f},{sig:0.3f}\n")
+
+        for ii, fig in enumerate(figures):
+            filename = os.path.join(outputdir, f"{ii+1}_demod.png")
+            fig.savefig(filename)
+            logging.info("Saving " + filename)
+
+
     else:
         bitstream = []
         times = []
@@ -115,9 +120,16 @@ def processAXCTD(inputfile, outputdir, plot=False, fromAudio=True):
         axs1[0].set_xlabel('Temperature (C)')
         axs1[1].set_xlabel('Conductivity (mS/cm)')
         axs1[2].set_xlabel('Salinity (PSU)')
+        for ax in axs1:
+            ax.set_ylim(ax.get_ylim()[::-1])
+            ax.grid(True)
         plt.tight_layout()
-        plt.show()
 
+        logging.info("Saving " + filename)
+        fig1.savefig(os.path.join(outputdir, "ctd.png"))
+
+    if plot:
+        plt.show()
 
 
 ###################################################################################
