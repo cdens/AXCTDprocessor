@@ -27,6 +27,7 @@
 ###################################################################################
 
 import logging
+import os
 
 import numpy as np
 
@@ -122,94 +123,29 @@ def parseBitstreamToProfile(bitstream, times, p7500):
 
     return T, C, S, z, timeout
 
+def parse_bitstream_to_profile(bitstream, times, p7500, debugdir=''):
+    """ Parse a bitstream to a profile of temperature and conductivity
 
+    """
 
-def parse_bitstream_to_profile(bitstream, times, p7500):
-    
     timeout = []
     T = []
     C = []
     S = []
     z = []
-    frames = [] # tuple of index, frame
-    triggertime = None
-    
-    p7500thresh = 0.7 #threshold for valid data from power at 7500 Hz
-    masks = generateMasks()
-    
-    # Convert bitstream to a string of characters
-    #bitstream = ''.join(['1' if b else '0' for b in bitstream0])
 
-    #identifying end of final long pulse
-    lastPulseInd = 0
-    sumConnectedOnes = 0
-    for i, b in enumerate(bitstream):
-        if b == 1:
-            sumConnectedOnes += 1
-        else:
-            sumConnectedOnes = 0
-            
-        if sumConnectedOnes >= 100:
-            lastPulseInd = i
-                
-    s = lastPulseInd #starts on final 1 bit (starting first '100' frame header)
-    logging.debug("Pulse starts at s={:d} t={:0.6f}".format(s, times[s]))
-    
-    
-    #initializing fields for loop
-    numbits = len(bitstream)
-    trash = []
-    
-    #looping through bits until finished parsing
-    while True:
-        
-        foundMatch = False
-        
-
-        if s >= numbits - 32: #won't overrun bitstream
-            break
-
-        # Check pilot tone
-        if triggertime is None and p7500[s] >= p7500thresh:
-            triggertime = times[s]
-            logging.info(f"Triggered @ {triggertime:0.6f} sec")
-
-
-        cseg = bitstream[s:s+32]
-
-        if cseg[0:3] != [1, 0, 0]:
-            trash.append(cseg[0])
-            s += 1
-            continue
-
-
-        if False and not checkECC(cseg, masks):
-            trash.append(cseg[0])
-            s += 1
-            continue
-
-        if trash:
-            print_frame("Trash", trash, s, times[s])
-            frames.append((0, s, trash))
-            trash = []
-
-        frames.append((1, s, cseg))
-        print_frame("Frame", cseg, s, times[s])
-        s += 32
-
-    # End parse bitstream
-
+    triggertime, frames = decode_bitstream_to_frames(bitstream, times, p7500, debugdir)
 
     # Parse frames into science data
-    for type, s, frame in frames:
+    for type, s, frame, t in frames:
         if type == 0:
             continue
 
         # For now, don't do frames before the trigger time
-        if times[s] < triggertime:
+        if t < triggertime:
             continue
 
-        timeout.append(times[s] - triggertime)
+        timeout.append(t - triggertime)
         cT, cC, cS, cz = convertFrame(frame, timeout[-1])
         T.append(cT)
         C.append(cC)
@@ -221,10 +157,98 @@ def parse_bitstream_to_profile(bitstream, times, p7500):
 
 
 
-def print_frame(label, cseg, s, t):
+def decode_bitstream_to_frames(bitstream, times, p7500, debugdir):
+    """ Decode a bitstream to a series of frames.
+
+    If debugdir is provided, a text debugging files are saved to this directory
+
+    returns (triggertime, frames)
+    triggertime is the detected time of the trigger
+    frames a list of of tuples, where the first element is the type
+    frames[i][0]: 1 = a frame, 0 = bits not used in decoding
+    frames[i][1]: The start time of this frame
+    frames[i][2]: The bits of this frame or unused bits
+
+    """
+
+
+    
+    frames = [] # tuple of index, frame
+    triggertime = None
+    
+    p7500thresh = 0.7 #threshold for valid data from power at 7500 Hz
+    ecc = ErrorCorrection()
+    
+    # Convert bitstream to a string of characters
+    #bitstream = ''.join(['1' if b else '0' for b in bitstream0])
+
+    #identifying end of final long pulse
+    last_pulse_ind = 0
+    pulse_length = 0
+    for i, b in enumerate(bitstream):
+        if b == 1:
+            pulse_length += 1
+        else:
+            pulse_length = 0
+        if pulse_length >= 100:
+            last_pulse_ind = i
+
+
+        # Check pilot tone
+        if triggertime is None and p7500[i] >= p7500thresh:
+            triggertime = times[i]
+            logging.info(f"Triggered @ {triggertime:0.6f} sec")
+
+
+    #starts on final 1 bit (starting first '100' frame header)
+    s = last_pulse_ind
+    logging.debug("Pulse starts at s={:d} t={:0.6f}".format(s, times[s]))
+
+    #initializing fields for loop
+    numbits = len(bitstream)
+    trash = []
+    
+    #looping through bits until finished parsing
+    while s + 32 < numbits:
+        if bitstream[s:s+3] != [1, 0, 0]:
+            trash.append(bitstream[s])
+            s += 1
+            continue
+
+        if not ecc.check(bitstream[s:s+32]):
+            trash.append(bitstream[s])
+            s += 1
+            continue
+
+        if trash:
+            logging.debug(format_frame("Trash", trash, s, times[s]))
+            frames.append((0, s, trash, times[s - len(trash)]))
+            trash = []
+
+        frames.append((1, s, bitstream[s:s+32], times[s]))
+        logging.debug(format_frame("Frame", bitstream[s:s+32], s, times[s]))
+        s += 32
+
+    # End parse bitstream
+
+    if debugdir:
+        outfile = os.path.join(debugdir, 'bitframes.txt')
+        logging.info("Writing " + outfile)
+        with open(outfile, 'wt') as fout:
+            for type, s, frame, t in frames:
+                label = "Frame" if type == 1 else "Trash"
+                msg = format_frame(label, frame, s, t) + "\n"
+                fout.write(msg)
+
+
+    return triggertime, frames
+
+
+
+def format_frame(label, cseg, s, t):
     sseg = "".join( ['1' if b else '0' for b in cseg])
-    msg = "{:s} s={:10d}, t={:12.6f} {:s}".format(label, s, t, sseg)
-    logging.debug(msg)
+    msg = "{:s} t={:12.6f}, s={:7d}, len={:3}, {:s}".format(label, t, s,len(sseg), sseg)
+    return msg
 
 
 
@@ -232,7 +256,30 @@ def print_frame(label, cseg, s, t):
 #                   ERROR CORRECTING CODE CHECK/APPLICATION                       #
 ###################################################################################
 
+class ErrorCorrection:
 
+    def __init__(self):
+        self.masks = generateMasks()
+
+    def check(self, frame):
+        """  RUN ECC CHECK ON FRAME WITH MASKS CREATED IN GENERATEMASKS() """
+
+        if sum(frame)%2 != 0: #if parity isn't even
+            return False
+
+        data = np.asarray(frame[4:27]) #data ECC applies to
+        ecc = frame[27:32] #ECC bits
+
+        for (bitMasks, bit) in zip(self.masks, ecc): #checking masks for each ECC bit
+            for mask in bitMasks: #loops through all 8 masks for each bit
+                if (sum(data*mask) + bit)%2 != 0:
+                    return False # isValid = False
+        return True #isValid
+
+
+    def correct(self, frame):
+        """ Correct a frame """
+        pass
 
 #  GENERATING ECC MASKS FOR FRAME PARSING  
 def generateMasks():
@@ -259,21 +306,6 @@ def generateMasks():
         
     
     
-#  RUN ECC CHECK ON FRAME WITH MASKS CREATED IN GENERATEMASKS()
-def checkECC(frame, masks):
-
-    if sum(frame)%2 != 0: #if parity isn't even
-        return False
-        
-    data = np.asarray(frame[4:27]) #data ECC applies to
-    ecc = frame[27:32] #ECC bits
-    
-    for (bitMasks, bit) in zip(masks, ecc): #checking masks for each ECC bit
-        for mask in bitMasks: #loops through all 8 masks for each bit
-            if (sum(data*mask) + bit)%2 != 0:
-                return False # isValid = False
-    
-    return True #isValid
 
 
 

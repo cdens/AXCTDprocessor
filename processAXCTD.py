@@ -100,7 +100,7 @@ def processAXCTD(inputfile, outputdir, plot=False, fromAudio=True):
     #parsing bitstream to CTD profile
     print("[+] Parsing AXCTD bitstream into frames")
     #T,C,S,z = parseAXCTDframes.parseBitstreamToProfile(bitstream, times, p7500)
-    T, C, S, z, timeout = parseAXCTDframes.parse_bitstream_to_profile(bitstream, times, p7500)
+    T, C, S, z, timeout = parseAXCTDframes.parse_bitstream_to_profile(bitstream, times, p7500, outputdir)
     
 
 
