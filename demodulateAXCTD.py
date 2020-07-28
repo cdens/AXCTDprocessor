@@ -128,7 +128,7 @@ def demodulate_axctd(pcmin, fs, bplot=True):
     # Change these variables to allow partial file processing for debugging
     tstart = 0.01
     istart = int(fs * tstart)
-    iend = len(pcmin) // 16
+    iend = len(pcmin) // 2
 
 
     #basic configuration
@@ -152,6 +152,15 @@ def demodulate_axctd(pcmin, fs, bplot=True):
     logging.info("PCM signal length: {:d} samples, {:0.3f} seconds"
                  "".format(len_pcm, sig_time))
 
+    if fs >= 44100: # downsample
+        pcm = signal.decimate(pcm, 2)
+        fs /= 2
+        # Basic signal accounting information
+        dt = 1/fs
+        len_pcm = len(pcm)
+        sig_time = len_pcm * dt # signal time duration
+        sig_endtime = tstart + sig_time
+
 
     t1 = np.arange(tstart, sig_endtime, dt)
     # TODO: make this filter configurable
@@ -159,6 +168,7 @@ def demodulate_axctd(pcmin, fs, bplot=True):
     #sos = signal.butter(6, [f1 * 0.5, f2 * 1.5], btype='bandpass', fs=fs, output='sos')
     #sos = signal.butter(6, [5, 1200], btype='bandpass', fs=fs, output='sos')
     sos = signal.butter(6, 1200, btype='lowpass', fs=fs, output='sos')
+    #sos = signal.cheby1(6, 0.1, 1200, btype='lowpass', fs=fs, output='sos')
     pcmlow = signal.sosfilt(sos, pcm)
 
     figures = []
@@ -209,8 +219,8 @@ def demodulate_axctd(pcmin, fs, bplot=True):
         axs[0].set_title('Digital data (squelched)')
         axs[0].grid(True)
 
-        axs[1].plot(t1, f_datasq(t1))
-        axs[1].plot(t1, 50*squelch_mask_t1)
+        axs[1].plot(t1, f_datasq(t1), label='Data Signal')
+        axs[1].plot(t1, 50*squelch_mask_t1, label='Squelch Mask')
         plt.tight_layout()
 
     logging.debug("Done filtering")
@@ -220,9 +230,9 @@ def demodulate_axctd(pcmin, fs, bplot=True):
     # convert original lowpassed signal to complex domain IQ, centered at fc
 
     # downconvert and lowpass filter
-    fcarrier = np.exp(2*np.pi*1j*fc*t1)
+    fcarrier = np.exp(2*np.pi*1j*-fc*t1)
     # TODO: make the downconversion filter frequency configurable
-    sosdcx = signal.butter(6, fc*0.6, btype='lowpass', fs=fs, output='sos')
+    sosdcx = signal.butter(4, fc*0.6, btype='lowpass', fs=fs, output='sos')
     pcmiq = signal.sosfilt(sosdcx, fcarrier * pcmlow)
     pcmiq /= np.max(np.abs(pcmiq))
     pcmiq *= squelch_mask_t1
@@ -276,11 +286,13 @@ def demodulate_axctd(pcmin, fs, bplot=True):
         plt.tight_layout()
 
         # overlay low pass filter
-        f, Pxx = signal.periodogram(np.real(pcmiq), **fftopts)
+        pcmiq2 = signal.sosfilt(sosdcx, fcarrier * pcmlow)
+        f, Pxx = signal.periodogram(np.real(pcmiq2), **fftopts)
+        Pxx /= np.max(Pxx)
         axs4[2].plot(f, 10*np.log10(Pxx + dbeps), label='dcx data')
         w, h = signal.sosfreqz(sosdcx, fs=fs, worN=fh)
         axs4[2].plot(w, 20 * np.log10(np.abs(h) + dbeps), label='dcx lpf')
-        axs4[2].set_title('Butterworth filter frequency response')
+        axs4[2].set_title('Downconversion')
         axs4[2].set_xlabel('Frequency [Hz]')
         axs4[2].set_ylabel('Amplitude [dB]')
         axs4[2].margins(0, 0.1)
@@ -455,7 +467,7 @@ def signal_levels(pcm, fs, fprof, minratio=2.0):
 
     """
 
-    logging.debug("Making spectrogram")
+    logging.debug(f"Making spectrogram, fs={fs:0.1f}")
     nfft = 4096
     nperseg =  nfft // 2
     f, t, Sxx = signal.spectrogram(pcm, fs=fs, nfft=nfft,
@@ -467,7 +479,7 @@ def signal_levels(pcm, fs, fprof, minratio=2.0):
     # Get the indices that represent each band, using bw of about 700 hz
     bw2 = 400.0
     band_fc = [600,         # digital data band
-               11000 - bw2, # quiet band
+               11000 - 2*bw2, # quiet band
                7500         # profile active
               ]
     # Power levels in each band
@@ -480,9 +492,10 @@ def signal_levels(pcm, fs, fprof, minratio=2.0):
     # When we use mode='magnitude', scale by 20 instead of 10 for power
     # Signal level of data band
     data_db = 20*np.log10(levels[0] / levels[1])
+    data_db -= min(data_db)
     # signal level of the profile active tone
     active_db = 20*np.log10(levels[2] / levels[1])
-
+    active_db -= min(active_db)
     return t, data_db, active_db
 
 
