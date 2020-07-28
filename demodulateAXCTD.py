@@ -123,7 +123,7 @@ def demodulateAXCTD0(pcm, fs):
 
 
 
-def demodulate_axctd(pcmin, fs, bplot=True):
+def demodulate_axctd(pcmin, fs, plot=False):
 
     # Change these variables to allow partial file processing for debugging
     tstart = 0.01
@@ -175,7 +175,7 @@ def demodulate_axctd(pcmin, fs, bplot=True):
     #--------------------------------------------------------------
     logging.debug("Making spectrogram")
 
-    if bplot:
+    if plot:
         fig2, axs2 = plt.subplots(3, 1, sharex=True)
         figures.append(fig2)
         nfft = 8192
@@ -193,7 +193,7 @@ def demodulate_axctd(pcmin, fs, bplot=True):
     t2, data_db, active_db = signal_levels(pcm, fs=fs, fprof=fprof)
     t2 += tstart
 
-    if bplot:
+    if plot:
         axs2[2].plot(t2, data_db, label='Data')
         axs2[2].plot(t2, active_db, label='Active')
         axs2[2].set_title('Signal Levels')
@@ -211,7 +211,7 @@ def demodulate_axctd(pcmin, fs, bplot=True):
     squelch_mask_t1 = (f_datasq(t1) > squelch_snr)
     pcm_sq = pcmlow * squelch_mask_t1
 
-    if bplot:
+    if plot:
         fig1, axs = plt.subplots(2, 1, sharex=True)
         figures.append(fig1)
 
@@ -249,7 +249,7 @@ def demodulate_axctd(pcmin, fs, bplot=True):
     print(f)
     print(Pxx)
     print(np.max(np.abs(Pxx)))
-    if bplot:
+    if plot:
         fig4, axs4 = plt.subplots(3, 1)
         figures.append(fig4)
 
@@ -320,7 +320,7 @@ def demodulate_axctd(pcmin, fs, bplot=True):
     corr = corr_f2 - corr_f1
     fcorr = interpolate.interp1d(t1[::decimate], corr, fill_value=0.0, bounds_error=False)
 
-    if bplot:
+    if plot:
         args = (fcorr, tstart, fs, len_pcm, bitrate)
         tbits0, bits0 = sample_bits(0.0, *args)
 
@@ -340,7 +340,7 @@ def demodulate_axctd(pcmin, fs, bplot=True):
     # edge-filtered
     corr_d = schmitt_trigger(corr, fast=True)
 
-    if bplot:
+    if plot:
         fcorr_d = interpolate.interp1d(t1[::decimate], corr_d, kind='linear', copy=False)
         args = (fcorr_d, tstart, fs, len_pcm, bitrate)
         tbits, bits = sample_bits(0.0, *args)
@@ -391,7 +391,7 @@ def demodulate_axctd(pcmin, fs, bplot=True):
     tbits2 = fsampletime(tbits2) + (1 / (bitrate*2))
     bits2 = fcorr(tbits2)
 
-    if bplot:
+    if plot:
         axs3[2].plot(t1[::decimate], corr, label='MF', **lineopts)
         axs3[2].plot(tbits0, bits0, label='naive', **markeropts)
         markeropts['marker'] = '+'
@@ -410,7 +410,7 @@ def demodulate_axctd(pcmin, fs, bplot=True):
     qfactor = np.sqrt(np.mean((bits2*2) ** 2))
     logging.info(f"demodulation quality: {qfactor:0.3f} / 1.000")
 
-    if bplot:
+    if plot:
         # Demodulation quality
         #fig4, axs4 = plt.subplots(2, 1)
         #figures.append(fig4)
@@ -432,7 +432,7 @@ def demodulate_axctd(pcmin, fs, bplot=True):
     active_db2 = f_active(t1)
     data_db2 = f_datasq(t1)
 
-    if bplot:
+    if plot:
         pass #fig3.clear()
 
     return list(tbits2), bits_d, list(data_db2), list(active_db2), figures

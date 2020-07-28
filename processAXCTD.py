@@ -69,7 +69,8 @@ def processAXCTD(inputfile, outputdir, plot=False, fromAudio=True):
         
         logging.info("Demodulating audio")
         #demodulating PCM data
-        times, bitstream, signallevel, p7500, figures = demodulateAXCTD.demodulate_axctd(audiostream, fs, plot)
+        times, bitstream, signallevel, p7500, figures = \
+              demodulateAXCTD.demodulate_axctd(audiostream, fs, plot=plot)
 
         if plot:
             plt.show()
@@ -93,8 +94,11 @@ def processAXCTD(inputfile, outputdir, plot=False, fromAudio=True):
     
     #parsing bitstream to CTD profile
     print("[+] Parsing AXCTD bitstream into frames")
-    T,C,S,z = parseAXCTDframes.parseBitstreamToProfile(bitstream, times, p7500)
+    #T,C,S,z = parseAXCTDframes.parseBitstreamToProfile(bitstream, times, p7500)
+    T, C, S, z, timeout = parseAXCTDframes.parse_bitstream_to_profile(bitstream, times, p7500)
     
+
+
     #writing CTD data to ASCII file
     print("[+] Writing AXCTD data to " + outputfile)
     with open(outputfile, "wt") as f:
@@ -102,7 +106,17 @@ def processAXCTD(inputfile, outputdir, plot=False, fromAudio=True):
         for (ct, cc, cs, cz) in zip(T, C, S, z):
             f.write(f"{cz:6.1f}\t\t{ct:6.2f}\t\t{cc:6.2f}\t\t{cs:6.2f}\n")
 
-
+    if plot:
+        fig1, axs1 = plt.subplots(1, 3, sharey=True)
+        axs1[0].plot(T, z, label='Temp (C)')
+        axs1[1].plot(C, z, label='Cond (mS/cm)')
+        axs1[2].plot(S, z, label='Sal (PSU)')
+        axs1[0].set_ylabel('Depth (m)')
+        axs1[0].set_xlabel('Temperature (C)')
+        axs1[1].set_xlabel('Conductivity (mS/cm)')
+        axs1[2].set_xlabel('Salinity (PSU)')
+        plt.tight_layout()
+        plt.show()
 
 
 
