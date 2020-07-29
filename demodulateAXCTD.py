@@ -402,8 +402,8 @@ def demodulate_axctd(pcmin, fs, plot=False):
 
         plt.tight_layout()
 
-    # Convert bits analog waveform to actual array of bits. 
-    bits_d = [1 if x > 0 else 0 for x in bits2]
+    # Convert bits analog waveform to actual array of bits for a bitstring
+    bits_d = ''.join(['1' if x > 0 else '0' for x in bits2])
 
     # For QC, calculate how far things are from 0
     # a higher q factor means decoding is better

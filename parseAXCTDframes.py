@@ -170,6 +170,28 @@ def parse_frames_to_profile(frames, times, triggertime):
         z.append(cz)
     return T, C, S, z, time1
 
+def get_pulse_and_trigger(bitstream, minlength, times, p7500, p7500thresh):
+    #identifying end of final long pulse
+    # could use regexp
+    triggertime = None
+    last_pulse_ind = 0
+    pulse_length = 0
+    for i, b in enumerate(bitstream):
+        if b == '1':
+            pulse_length += 1
+        else: # assert b == '0'
+            pulse_length = 0
+
+        if pulse_length >= minlength:
+            last_pulse_ind = i
+
+        # Check pilot tone
+        if triggertime is None and p7500[i] >= p7500thresh:
+            triggertime = times[i]
+            logging.info(f"Triggered @ {triggertime:0.6f} sec")
+
+    return triggertime, last_pulse_ind
+
 def decode_bitstream_to_frames(bitstream, times, p7500, debugdir, ecc=True):
     """ Decode a bitstream to a series of frames.
 
@@ -178,51 +200,33 @@ def decode_bitstream_to_frames(bitstream, times, p7500, debugdir, ecc=True):
     returns (triggertime, frames)
     triggertime is the detected time of the trigger
     frames a list of of tuples, where the first element is the type
-    frames[i][0]: 1 = a frame, 0 = bits not used in decoding
+    frames[i][0]: 1 = a frame, 0 = bits not used in decoding (trash)
     frames[i][1]: The start time of this frame
-    frames[i][2]: The bits of this frame or of unused bits
+    frames[i][2]: The bits of this frame or of unused bits, as a string of bits
 
     """
 
-    frames = [] # tuple of index, frame
-    triggertime = None
+    frames = [] # tuple of type, index, frame
     
     p7500thresh = 0.7 #threshold for valid data from power at 7500 Hz
     
-
-    #identifying end of final long pulse
-    last_pulse_ind = 0
-    pulse_length = 0
-    for i, b in enumerate(bitstream):
-        if b == 1:
-            pulse_length += 1
-        else:
-            pulse_length = 0
-
-        if pulse_length >= 100:
-            last_pulse_ind = i
-
-        # Check pilot tone
-        if triggertime is None and p7500[i] >= p7500thresh:
-            triggertime = times[i]
-            logging.info(f"Triggered @ {triggertime:0.6f} sec")
+    triggertime, last_pulse_ind = get_pulse_and_trigger(bitstream, 100, times, p7500, p7500thresh)
 
 
     #starts on final 1 bit (starting first '100' frame header)
     s = last_pulse_ind
     logging.debug("Pulse starts at s={:d} t={:0.6f}".format(s, times[s]))
 
-    #initializing fields for loop
     eccv = ErrorCorrection()
-    numbits = len(bitstream)
-    trash = []
-    
-
     if ecc:
         logging.info("Verifying ECC checksums")
     else:
         logging.info("Not verifying ECC checksums")
-    
+
+    #initializing fields for loop
+    numbits = len(bitstream)
+    # Index of the next unconsumed bit, for "trash" tracking
+    nextbit_ind = s
 
     fdebug = None
     if debugdir:
@@ -233,42 +237,42 @@ def decode_bitstream_to_frames(bitstream, times, p7500, debugdir, ecc=True):
     #looping through bits until finished parsing
     while s + 32 < numbits:
         # TODO: we should really error correct these bits too
-        if bitstream[s:s+3] != [1, 0, 0]:
-            trash.append(bitstream[s])
+        if bitstream[s:s+3] != '100':
             s += 1
             continue
 
-        if ecc and not eccv.check_b(binListToInt(bitstream[s:s+32])):
-            trash.append(bitstream[s])
+        frame_b = bitstring_to_int(bitstream[s:s+32])
+        frame_parity = eccv.parity_b(frame_b)
+        frame_ecc = eccv.check_b(frame_b)
+
+        if ecc and not frame_ecc:  # if frame ecc is incorrect, then quit
             s += 1
             continue
 
-        if trash:
-            s0 = s - len(trash)
-
-            msg = format_frame('Trash', trash, s, times[s0])
-            logging.debug(msg)
+        if nextbit_ind < s:
+            msg = format_frame('Trash', bitstream[nextbit_ind:s], nextbit_ind, times[nextbit_ind], False, False)
+            #logging.debug(msg)
             if fdebug:
                 fdebug.write(msg + "\n")
-            frames.append((0, s0, trash))
-            trash = []
+            frames.append((0, nextbit_ind, bitstream[nextbit_ind:s]))
+            #nextbit_ind = s
+
+        msg = format_frame('Frame', bitstream[s:s+32], s, times[s], frame_parity, frame_ecc)
+        #logging.debug(msg)
+        if fdebug:
+            fdebug.write(msg + "\n")
 
         frames.append((1, s, bitstream[s:s+32]))
-        msg = format_frame('Frame', bitstream[s:s+32], s, times[s])
-        logging.debug(msg)
-        if fdebug:
-            fdebug.write(msg + "\n")
-
         s += 32
+        nextbit_ind = s
 
-    if trash:
-        s0 = s - len(trash)
-        msg = format_frame('Trash', trash, s, times[s0])
-        logging.debug(msg)
+    if nextbit_ind < s:
+        msg = format_frame('Trash', bitstream[nextbit_ind:s], nextbit_ind, times[nextbit_ind], False, False)
+        #logging.debug(msg)
         if fdebug:
             fdebug.write(msg + "\n")
-        frames.append((0, s0, trash))
-        trash = []
+        frames.append((0, nextbit_ind, bitstream[nextbit_ind:s]))
+        nextbit_ind = s
 
 
     # End parse bitstream
@@ -280,10 +284,16 @@ def decode_bitstream_to_frames(bitstream, times, p7500, debugdir, ecc=True):
 
 
 
-def format_frame(label, cseg, s, t):
-    sseg = "".join( ['1' if b else '0' for b in cseg])
-    msg = "{:s} t={:12.6f}, s={:7d}, len={:3}, {:s}".format(label, t, s,len(sseg), sseg)
-    return msg
+def format_frame(label, cseg, s, t, frame_parity, frame_ecc):
+    """ Output type, frame time, index, length, parity ok, ecc ok, frame contents """
+    #sseg = "".join( ['1' if b else '0' for b in cseg])
+    if label == 'Frame':
+        token_parity = 'PAR_OK ' if frame_parity else 'PAR_BAD'
+        token_ecc    = 'ECC_OK ' if frame_parity else 'ECC_BAD'
+    else:
+        token_parity = '-      '
+        token_ecc    = '-      '
+    return "{:s} t={:12.6f}, s={:7d}, len={:3},{:s},{:s},{:s}".format(label, t, s, len(cseg), token_parity, token_ecc, cseg)
 
 
 
@@ -311,6 +321,12 @@ class ErrorCorrection:
                 if (sum(data*mask) + bit)%2 != 0:
                     return False # isValid = False
         return True #isValid
+
+    def parity_b(self, frame_b):
+        """ Check only parity of this frame. Returns true if parity is correct (even),
+        or false if incorrect (odd)  """
+        return bitparity(frame_b) == 0 #if parity isn't even
+
     def check_b(self, frame_b):
         """  RUN ECC CHECK ON FRAME WITH MASKS CREATED IN GENERATEMASKS()
         Note that currently, the bits are internally stored backwards, where bit 32
@@ -411,8 +427,8 @@ def convertFrame(frame, time):
     z = 0.72 + 2.76124*time - 0.000238007*time**2
     
     #temperature/conductivity from frame
-    T = 0.0107164443 * binListToInt(frame[15:27]) - 5.5387245882
-    C = 0.0153199220 * binListToInt(frame[4:15]) - 0.0622192776
+    T = 0.0107164443 * bitstring_to_int(frame[15:27]) - 5.5387245882
+    C = 0.0153199220 * bitstring_to_int(frame[4:15]) - 0.0622192776
     
     #salinity from temperature/conductivity/depth
     if USE_GSW:
@@ -429,6 +445,11 @@ def convertFrame(frame, time):
 ###################################################################################
 #                         BINARY LIST / INTEGER CONVERSION                       #
 ###################################################################################
+
+def bitstring_to_int(bitstring):
+    """ Convert a bitstring to an integer with the leftmost bit
+    as the least significant bit """
+    return int(bitstring[::-1], 2)
 
 def binListToInt(binary):
     """ Convert a list of bits into a binary number """
