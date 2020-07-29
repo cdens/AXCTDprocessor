@@ -137,9 +137,10 @@ def parse_bitstream_to_profile(bitstream, times, p7500, debugdir=''):
     triggertime, frames = decode_bitstream_to_frames(bitstream, times, p7500, debugdir)
 
     # Parse frames into science data
-    for type, s, frame, t in frames:
+    for type, s, frame in frames:
         if type == 0:
             continue
+        t = times[s]
 
         # For now, don't do frames before the trigger time
         if t < triggertime:
@@ -208,24 +209,31 @@ def decode_bitstream_to_frames(bitstream, times, p7500, debugdir):
     
     #looping through bits until finished parsing
     while s + 32 < numbits:
+        # TODO: we should really error correct these.
         if bitstream[s:s+3] != [1, 0, 0]:
             trash.append(bitstream[s])
             s += 1
             continue
-
-        if not ecc.check(bitstream[s:s+32]):
+        frame_b = binListToInt(bitstream[s:s+32])
+        if not ecc.check_b(frame_b):
             trash.append(bitstream[s])
             s += 1
             continue
 
         if trash:
-            logging.debug(format_frame("Trash", trash, s, times[s]))
-            frames.append((0, s, trash, times[s - len(trash)]))
+            logging.debug(format_frame("Trash", trash, s, times[s - len(trash)]))
+            frames.append((0, s - len(trash), trash))
             trash = []
 
-        frames.append((1, s, bitstream[s:s+32], times[s]))
+        frames.append((1, s, bitstream[s:s+32]))
         logging.debug(format_frame("Frame", bitstream[s:s+32], s, times[s]))
         s += 32
+
+    if trash:
+        logging.debug(format_frame("Trash", trash, s, times[s]))
+        frames.append((0, s - len(trash), trash))
+        trash = []
+
 
     # End parse bitstream
 
@@ -233,8 +241,9 @@ def decode_bitstream_to_frames(bitstream, times, p7500, debugdir):
         outfile = os.path.join(debugdir, 'bitframes.txt')
         logging.info("Writing " + outfile)
         with open(outfile, 'wt') as fout:
-            for type, s, frame, t in frames:
+            for type, s, frame in frames:
                 label = "Frame" if type == 1 else "Trash"
+                t = times[s]
                 msg = format_frame(label, frame, s, t) + "\n"
                 fout.write(msg)
 
@@ -274,10 +283,11 @@ class ErrorCorrection:
                 if (sum(data*mask) + bit)%2 != 0:
                     return False # isValid = False
         return True #isValid
-    def check2(self, frame, frame_b):
+    def check_b(self, frame_b):
         """  RUN ECC CHECK ON FRAME WITH MASKS CREATED IN GENERATEMASKS()
         Note that currently, the bits are internally stored backwards, where bit 32
         (the last bit received in the bitstream frame) is in the lowest order bit position
+        frame_b is an integer representing the frame
         """
 
         if bitparity(frame_b) != 0: #if parity isn't even
@@ -285,15 +295,6 @@ class ErrorCorrection:
 
         data_b = (frame_b >> 5) & 0x007fffff # frame[4:27], data bits
         ecc_b = (frame_b >> 0) & 0x1f # frame[27:32], ECC bits
-
-
-        #print("frame {:s} {:032b}".format(str("".join([str(x) for x in frame])), frame_b))
-        #print("data  {:s} {:023b}".format(str("".join([str(x) for x in data])), data_b))
-        #print("ecc   {:s} {:05b}".format(str("".join([str(x) for x in ecc])), ecc_b))
-        #data = np.asarray(frame[4:27]) #data ECC applies to
-        #ecc = frame[27:32] #ECC bits
-        #assert binListToInt(data) == data_b
-        #assert binListToInt(ecc) == ecc_b
 
         for ii, bitmasks in enumerate(self.bitmasks): # Check masks for each ECC bit
             parity = 1 if ecc_b & (1 << (4-ii)) else 0
@@ -309,6 +310,7 @@ class ErrorCorrection:
         """ Correct a frame """
         pass
 
+# see also: https://wiki.python.org/moin/BitManipulation
 
 def bitcount(w):
     """ Count the number of 1 bits in a 32-bit word
@@ -367,7 +369,7 @@ def test_ecc():
         if ii % 1000 == 0:
             print("ecc:", x)
         y = intToBinList(x, 32)
-        assert ecc.check(y) == ecc.check2(y, x)
+        assert ecc.check(y) == ecc.check_b(x)
 
 
 
@@ -403,25 +405,30 @@ def convertFrame(frame, time):
 def binListToInt(binary):
     """ Convert a list of bits into a binary number """
     x = 0
-    binlen = len(binary) - 1
-    for i in range(len(binary)):
-        x |= binary[binlen - i] << i
+    mask = 0x1 << (len(binary) - 1)
+    for b in binary:
+        if b:
+            x |= mask
+        mask >>= 1
 
     return x
 
-    
+
 def intToBinList(cInt, masklen):
     """ Convert a number into a list of bits with length
     at least masklen  """
     x = cInt
-    bin_list = []
+    i = 0
+    bin_list = [0] * masklen
     while x:
-        bin_list.insert(0, x & 1)
+        try:
+            bin_list[i] = x & 1
+        except IndexError: # if there are more bits than masklen
+            bin_list.append(x & 1)
         x >>= 1
+        i += 1
 
-    while len(bin_list) < masklen:
-        bin_list.insert(0, 0)
-
+    bin_list.reverse()
     return bin_list
 
 
@@ -447,7 +454,7 @@ def test_intbin():
 
 
 def main():
-    #test_intbin()
+    test_intbin()
     test_ecc()
 
 
