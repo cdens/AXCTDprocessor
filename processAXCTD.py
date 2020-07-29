@@ -108,9 +108,9 @@ def processAXCTD(inputfile, outputdir, plot=False, fromAudio=True, ecc=True):
     #writing CTD data to ASCII file
     print("[+] Writing AXCTD data to " + outputfile)
     with open(outputfile, "wt") as f:
-        f.write("Depth (m)\tTemperature (C)\tConductivity (mS/cm)\tSalinity (PSU)\n")
-        for (ct, cc, cs, cz) in zip(T, C, S, z):
-            f.write(f"{cz:6.1f}\t\t{ct:6.2f}\t\t{cc:6.2f}\t\t{cs:6.2f}\n")
+        f.write("Time (sec)\tDepth (m)\tTemperature (C)\tConductivity (mS/cm)\tSalinity (PSU)\n")
+        for (ct, cc, cs, cz, tt) in zip(T, C, S, z, timeout):
+            f.write(f"{tt:4.3f}\t\t{cz:6.1f}\t\t{ct:6.2f}\t\t{cc:6.2f}\t\t{cs:6.2f}\n")
 
     if plot:
         fig1, axs1 = plt.subplots(1, 3, sharey=True)
@@ -126,8 +126,9 @@ def processAXCTD(inputfile, outputdir, plot=False, fromAudio=True, ecc=True):
             ax.grid(True)
         plt.tight_layout()
 
+        filename = os.path.join(outputdir, "ctd.png")
         logging.info("Saving " + filename)
-        fig1.savefig(os.path.join(outputdir, "ctd.png"))
+        fig1.savefig(filename)
 
     if plot:
         plt.show()

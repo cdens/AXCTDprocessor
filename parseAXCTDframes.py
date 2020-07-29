@@ -245,19 +245,19 @@ def decode_bitstream_to_frames(bitstream, times, p7500, debugdir, ecc=True):
         frame_parity = eccv.parity_b(frame_b)
         frame_ecc = eccv.check_b(frame_b)
 
-        if ecc and not frame_ecc:  # if frame ecc is incorrect, then quit
+        if ecc and not frame_parity:  # if frame ecc is incorrect and requested, skip to next bit
             s += 1
             continue
 
         if nextbit_ind < s:
-            msg = format_frame('Trash', bitstream[nextbit_ind:s], nextbit_ind, times[nextbit_ind], False, False)
+            msg = format_frame('Trash', bitstream[nextbit_ind:s], nextbit_ind, times[nextbit_ind], False, False, triggertime)
             #logging.debug(msg)
             if fdebug:
                 fdebug.write(msg + "\n")
             frames.append((0, nextbit_ind, bitstream[nextbit_ind:s]))
             #nextbit_ind = s
 
-        msg = format_frame('Frame', bitstream[s:s+32], s, times[s], frame_parity, frame_ecc)
+        msg = format_frame('Frame', bitstream[s:s+32], s, times[s], frame_parity, frame_ecc, triggertime)
         #logging.debug(msg)
         if fdebug:
             fdebug.write(msg + "\n")
@@ -267,7 +267,7 @@ def decode_bitstream_to_frames(bitstream, times, p7500, debugdir, ecc=True):
         nextbit_ind = s
 
     if nextbit_ind < s:
-        msg = format_frame('Trash', bitstream[nextbit_ind:s], nextbit_ind, times[nextbit_ind], False, False)
+        msg = format_frame('Trash', bitstream[nextbit_ind:s], nextbit_ind, times[nextbit_ind], False, False, triggertime)
         #logging.debug(msg)
         if fdebug:
             fdebug.write(msg + "\n")
@@ -284,16 +284,20 @@ def decode_bitstream_to_frames(bitstream, times, p7500, debugdir, ecc=True):
 
 
 
-def format_frame(label, cseg, s, t, frame_parity, frame_ecc):
+def format_frame(label, cseg, s, t, frame_parity, frame_ecc, triggertime):
     """ Output type, frame time, index, length, parity ok, ecc ok, frame contents """
     #sseg = "".join( ['1' if b else '0' for b in cseg])
+    t2 = t - triggertime
     if label == 'Frame':
         token_parity = 'PAR_OK ' if frame_parity else 'PAR_BAD'
         token_ecc    = 'ECC_OK ' if frame_parity else 'ECC_BAD'
+        token_hex    = "{:08x}".format(int(cseg, 2))
     else:
         token_parity = '-      '
         token_ecc    = '-      '
-    return "{:s} t={:12.6f}, s={:7d}, len={:3},{:s},{:s},{:s}".format(label, t, s, len(cseg), token_parity, token_ecc, cseg)
+        token_hex = '--------'
+    return "{:s} t={:12.6f}, t'={:12.3f}, s={:7d}, len={:3},{:s},{:s},{:s},{:s}" \
+           "".format(label, t, t2, s, len(cseg), token_parity, token_ecc, token_hex, cseg)
 
 
 
@@ -426,15 +430,20 @@ def convertFrame(frame, time):
     #depth from time
     z = 0.72 + 2.76124*time - 0.000238007*time**2
     
-    #temperature/conductivity from frame
-    T = 0.0107164443 * bitstring_to_int(frame[15:27]) - 5.5387245882
-    C = 0.0153199220 * bitstring_to_int(frame[4:15]) - 0.0622192776
+    #temperature/conductivity from frame as an integer
+    t_int = bitstring_to_int(frame[7:16])
+    c_int = bitstring_to_int(frame[18:27])
+
+    T = 0.0107164443 * t_int - 5.5387245882
+    C = 0.0153199220 * c_int - 0.0622192776
+    
     
     #salinity from temperature/conductivity/depth
     if USE_GSW:
         S = gsw.SP_from_C(C,T,z) #assumes pressure (mbar) approx. equals depth (m)
     else:
         S = float('nan')
+    logging.debug(f"{time:0.3f} {t_int} {T} ; {c_int} {C}")
     
     return T, C, S, z
 
@@ -448,8 +457,9 @@ def convertFrame(frame, time):
 
 def bitstring_to_int(bitstring):
     """ Convert a bitstring to an integer with the leftmost bit
-    as the least significant bit """
-    return int(bitstring[::-1], 2)
+    as the most significant bit """
+    #return int(bitstring[::-1], 2)
+    return int(bitstring, 2)
 
 def binListToInt(binary):
     """ Convert a list of bits into a binary number """
