@@ -431,8 +431,8 @@ def convertFrame(frame, time):
     z = 0.72 + 2.76124*time - 0.000238007*time**2
     
     #temperature/conductivity from frame as an integer
-    t_int = bitstring_to_int(frame[7:16])
-    c_int = bitstring_to_int(frame[18:27])
+    t_int = bitstring_to_int(frame[15:27])
+    c_int = bitstring_to_int(frame[ 4:15])
 
     T = 0.0107164443 * t_int - 5.5387245882
     C = 0.0153199220 * c_int - 0.0622192776
