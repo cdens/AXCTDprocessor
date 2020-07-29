@@ -179,8 +179,6 @@ def decode_bitstream_to_frames(bitstream, times, p7500, debugdir):
     p7500thresh = 0.7 #threshold for valid data from power at 7500 Hz
     ecc = ErrorCorrection()
     
-    # Convert bitstream to a string of characters
-    #bitstream = ''.join(['1' if b else '0' for b in bitstream0])
 
     #identifying end of final long pulse
     last_pulse_ind = 0
@@ -190,9 +188,9 @@ def decode_bitstream_to_frames(bitstream, times, p7500, debugdir):
             pulse_length += 1
         else:
             pulse_length = 0
+
         if pulse_length >= 100:
             last_pulse_ind = i
-
 
         # Check pilot tone
         if triggertime is None and p7500[i] >= p7500thresh:
@@ -260,6 +258,7 @@ class ErrorCorrection:
 
     def __init__(self):
         self.masks = generateMasks()
+        self.bitmasks = get_masks()
 
     def check(self, frame):
         """  RUN ECC CHECK ON FRAME WITH MASKS CREATED IN GENERATEMASKS() """
@@ -275,27 +274,82 @@ class ErrorCorrection:
                 if (sum(data*mask) + bit)%2 != 0:
                     return False # isValid = False
         return True #isValid
+    def check2(self, frame, frame_b):
+        """  RUN ECC CHECK ON FRAME WITH MASKS CREATED IN GENERATEMASKS()
+        Note that currently, the bits are internally stored backwards, where bit 32
+        (the last bit received in the bitstream frame) is in the lowest order bit position
+        """
+
+        if bitparity(frame_b) != 0: #if parity isn't even
+            return False
+
+        data_b = (frame_b >> 5) & 0x007fffff # frame[4:27], data bits
+        ecc_b = (frame_b >> 0) & 0x1f # frame[27:32], ECC bits
+
+
+        #print("frame {:s} {:032b}".format(str("".join([str(x) for x in frame])), frame_b))
+        #print("data  {:s} {:023b}".format(str("".join([str(x) for x in data])), data_b))
+        #print("ecc   {:s} {:05b}".format(str("".join([str(x) for x in ecc])), ecc_b))
+        #data = np.asarray(frame[4:27]) #data ECC applies to
+        #ecc = frame[27:32] #ECC bits
+        #assert binListToInt(data) == data_b
+        #assert binListToInt(ecc) == ecc_b
+
+        for ii, bitmasks in enumerate(self.bitmasks): # Check masks for each ECC bit
+            parity = 1 if ecc_b & (1 << (4-ii)) else 0
+            for mask in bitmasks:
+                if bitparity(data_b & mask) != parity:
+                    return False
+
+        return True
+
 
 
     def correct(self, frame):
         """ Correct a frame """
         pass
 
+
+def bitcount(w):
+    """ Count the number of 1 bits in a 32-bit word
+    Glenn Rhoads snippets of c
+    http://gcrhoads.byethost4.com/Code/BitOps/bitcount.c
+    """
+    w = (0x55555555 & w) + ((0xaaaaaaaa & w) >> 1)
+    w = (0x33333333 & w) + ((0xcccccccc & w) >> 2)
+    w = (0x0f0f0f0f & w) + ((0xf0f0f0f0 & w) >> 4)
+    w = (0x00ff00ff & w) + ((0xff00ff00 & w) >> 8)
+    w = (0x0000ffff & w) + ((0xffff0000 & w) >>16)
+    return w
+
+def bitparity(w):
+    # http://gcrhoads.byethost4.com/Code/BitOps/parity.c
+    w ^= w>>1;
+    w ^= w>>2;
+    w ^= w>>4;
+    w ^= w>>8;
+    w ^= w>>16;
+    return w & 1;
+
+
+
 #  GENERATING ECC MASKS FOR FRAME PARSING  
-def generateMasks():
-    
-    maskLen = 23 #each mask is 23 bits long
-    
+
+def get_masks():
     #8 masks per ECC bit
-    maskInts = [[3166839,3167863,3168887,3169911,7360887,7361911,7362935,7363959], #bit 27
+    mask_ints = [[3166839,3167863,3168887,3169911,7360887,7361911,7362935,7363959], #bit 27
             [553292,554316,555340,556364,4747852,4748876,4749900,4750924], #bit 28
             [274854,275878,276902,277926,4469414,4470438,4471462,4472486], #bit 29
             [2233171,2234195,2235219,2236243,6426707,6427731,6428755,6429779], #bit 30
             [86494,87518,88542,89566,4281054,4282078,4283102,4284126]] #bit 31
+    return mask_ints
+def generateMasks():
+    maskLen = 23 #each mask is 23 bits long
     
+    mask_ints = get_masks()
     masks = []
     
-    for cMaskInts in maskInts:
+    for cMaskInts in mask_ints:
         cmasks = []
         for cInt in cMaskInts: 
             cmasks.append(np.asarray(intToBinList(cInt, maskLen)))
@@ -304,8 +358,16 @@ def generateMasks():
     return masks
         
         
+def test_ecc():
+    print("test_ecc()")
+    ecc = ErrorCorrection()
     
-    
+    # Increment by a prime number for speed
+    for ii, x in enumerate(range(0, 0xffffffff, 2011)):
+        if ii % 1000 == 0:
+            print("ecc:", x)
+        y = intToBinList(x, 32)
+        assert ecc.check(y) == ecc.check2(y, x)
 
 
 
@@ -339,36 +401,55 @@ def convertFrame(frame, time):
 ###################################################################################
 
 def binListToInt(binary):
-    
-    intVal = 0
-    
-    for i,b in enumerate(reversed(binary)):
-        intVal += b*2**i
+    """ Convert a list of bits into a binary number """
+    x = 0
+    binlen = len(binary) - 1
+    for i in range(len(binary)):
+        x |= binary[binlen - i] << i
 
-    return intVal
+    return x
 
     
-    
-    
-def intToBinList(cInt, maskLen):
+def intToBinList(cInt, masklen):
+    """ Convert a number into a list of bits with length
+    at least masklen  """
+    x = cInt
+    bin_list = []
+    while x:
+        bin_list.insert(0, x & 1)
+        x >>= 1
 
-    #increasing mask length if it's too small for the number
-    while cInt >= 2**maskLen:
-        maskLen += 1
-    
-    
-    binList = []
-    for i in range(maskLen):
-        cExp = maskLen-i-1
-        if cInt - 2**cExp >= 0:
-            cInt -= 2**cExp
-            binList.append(1)
+    while len(bin_list) < masklen:
+        bin_list.insert(0, 0)
+
+    return bin_list
+
+
+def test_intbin():
+    """ Check that these two functions are inverses of each other """
+    for masklen in range(1, 32):
+        maxv = 2 << masklen
+        if masklen < 20:
+            inc = 7
+        elif masklen < 28:
+            inc = 1009
         else:
-            binList.append(0)
-    
-    return binList
+            inc = 10099
+        print("Mask length:", masklen)
+        for x in range(0, 0xffffffff, inc):
+            if x >= maxv:
+                break
+            listbits = intToBinList(x, 32)
+            y = binListToInt(listbits)
+            assert x == y
+
         
 
 
+def main():
+    #test_intbin()
+    test_ecc()
 
-    
+
+if __name__ == "__main__":
+    main()
