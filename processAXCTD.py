@@ -42,7 +42,7 @@ import demodulateAXCTD, parseAXCTDframes
 #                               AXCTD PROCESSING DRIVER                           #
 ###################################################################################
 
-def processAXCTD(inputfile, outputdir, plot=False, fromAudio=True):
+def processAXCTD(inputfile, outputdir, plot=False, fromAudio=True, ecc=True):
 
     outputfile = os.path.join(outputdir, 'output.txt')
     demodfile = os.path.join(outputdir, 'demodbitstream.txt')
@@ -100,7 +100,8 @@ def processAXCTD(inputfile, outputdir, plot=False, fromAudio=True):
     #parsing bitstream to CTD profile
     print("[+] Parsing AXCTD bitstream into frames")
     #T,C,S,z = parseAXCTDframes.parseBitstreamToProfile(bitstream, times, p7500)
-    T, C, S, z, timeout = parseAXCTDframes.parse_bitstream_to_profile(bitstream, times, p7500, outputdir)
+    T, C, S, z, timeout = parseAXCTDframes.parse_bitstream_to_profile( \
+            bitstream, times, p7500, outputdir, ecc=ecc)
     
 
 
@@ -143,6 +144,7 @@ def main():
     parser.add_argument('-i', '--input', default='testfiles/sample_full.wav')
     parser.add_argument('-o', '--output', default='testfiles', help='output directory')
     parser.add_argument('--plot', action="store_true", help='Show plots')
+    parser.add_argument('--ecc', action="store_true", help='Do ECC checks')
     parser.add_argument('-v', '--verbose', action='store_true', help='Enable verbose output')
 
     args = parser.parse_args()
@@ -154,7 +156,7 @@ def main():
         os.makedirs(args.output)
     np.set_printoptions(precision=4)
 
-    return processAXCTD(args.input, args.output, plot=args.plot)
+    return processAXCTD(args.input, args.output, plot=args.plot, ecc=args.ecc)
 
 
 #MAIN

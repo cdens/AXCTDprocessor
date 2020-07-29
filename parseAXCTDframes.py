@@ -123,18 +123,34 @@ def parseBitstreamToProfile(bitstream, times, p7500):
 
     return T, C, S, z, timeout
 
-def parse_bitstream_to_profile(bitstream, times, p7500, debugdir=''):
+def parse_bitstream_to_profile(bitstream, times, p7500, debugdir='', ecc=True):
     """ Parse a bitstream to a profile of temperature and conductivity
 
     """
+    triggertime, frames = decode_bitstream_to_frames(bitstream, times, p7500, debugdir, ecc=ecc)
+    ret = parse_frames_to_profile(frames, times, triggertime)
+    # TODO: return frames
+    return ret
 
-    timeout = []
-    T = []
-    C = []
-    S = []
-    z = []
 
-    triggertime, frames = decode_bitstream_to_frames(bitstream, times, p7500, debugdir)
+def parse_frames_to_profile(frames, times, triggertime):
+    """
+    [GN] Proposal:
+    change this routine to return only 3 parallel lists:
+    list_time - time relative to trigger in seconds
+    list_temp - decoded temperature as deg C
+    list_cond - decoded conductivity as mS/cm
+
+    Salinity can be calculated externally from return values
+    and depth also calculated externally from time
+    """
+
+    # Initialize arrays
+    T = [] # temperature
+    C = [] # conductivity
+    S = [] # salinity
+    z = [] # depth
+    time1 = [] # time
 
     # Parse frames into science data
     for type, s, frame in frames:
@@ -146,19 +162,15 @@ def parse_bitstream_to_profile(bitstream, times, p7500, debugdir=''):
         if t < triggertime:
             continue
 
-        timeout.append(t - triggertime)
-        cT, cC, cS, cz = convertFrame(frame, timeout[-1])
+        time1.append(t - triggertime)
+        cT, cC, cS, cz = convertFrame(frame, time1[-1])
         T.append(cT)
         C.append(cC)
         S.append(cS)
         z.append(cz)
-    # TODO: return frames
+    return T, C, S, z, time1
 
-    return T, C, S, z, timeout
-
-
-
-def decode_bitstream_to_frames(bitstream, times, p7500, debugdir):
+def decode_bitstream_to_frames(bitstream, times, p7500, debugdir, ecc=True):
     """ Decode a bitstream to a series of frames.
 
     If debugdir is provided, a text debugging files are saved to this directory
@@ -168,17 +180,14 @@ def decode_bitstream_to_frames(bitstream, times, p7500, debugdir):
     frames a list of of tuples, where the first element is the type
     frames[i][0]: 1 = a frame, 0 = bits not used in decoding
     frames[i][1]: The start time of this frame
-    frames[i][2]: The bits of this frame or unused bits
+    frames[i][2]: The bits of this frame or of unused bits
 
     """
 
-
-    
     frames = [] # tuple of index, frame
     triggertime = None
     
     p7500thresh = 0.7 #threshold for valid data from power at 7500 Hz
-    ecc = ErrorCorrection()
     
 
     #identifying end of final long pulse
@@ -204,48 +213,67 @@ def decode_bitstream_to_frames(bitstream, times, p7500, debugdir):
     logging.debug("Pulse starts at s={:d} t={:0.6f}".format(s, times[s]))
 
     #initializing fields for loop
+    eccv = ErrorCorrection()
     numbits = len(bitstream)
     trash = []
     
+
+    if ecc:
+        logging.info("Verifying ECC checksums")
+    else:
+        logging.info("Not verifying ECC checksums")
+    
+
+    fdebug = None
+    if debugdir:
+        outfile = os.path.join(debugdir, 'bitframes.txt')
+        fdebug = open(outfile, 'wt')
+        logging.info("Writing " + outfile)
+
     #looping through bits until finished parsing
     while s + 32 < numbits:
-        # TODO: we should really error correct these.
+        # TODO: we should really error correct these bits too
         if bitstream[s:s+3] != [1, 0, 0]:
             trash.append(bitstream[s])
             s += 1
             continue
-        frame_b = binListToInt(bitstream[s:s+32])
-        if not ecc.check_b(frame_b):
+
+        if ecc and not eccv.check_b(binListToInt(bitstream[s:s+32])):
             trash.append(bitstream[s])
             s += 1
             continue
 
         if trash:
-            logging.debug(format_frame("Trash", trash, s, times[s - len(trash)]))
-            frames.append((0, s - len(trash), trash))
+            s0 = s - len(trash)
+
+            msg = format_frame('Trash', trash, s, times[s0])
+            logging.debug(msg)
+            if fdebug:
+                fdebug.write(msg + "\n")
+            frames.append((0, s0, trash))
             trash = []
 
         frames.append((1, s, bitstream[s:s+32]))
-        logging.debug(format_frame("Frame", bitstream[s:s+32], s, times[s]))
+        msg = format_frame('Frame', bitstream[s:s+32], s, times[s])
+        logging.debug(msg)
+        if fdebug:
+            fdebug.write(msg + "\n")
+
         s += 32
 
     if trash:
-        logging.debug(format_frame("Trash", trash, s, times[s]))
-        frames.append((0, s - len(trash), trash))
+        s0 = s - len(trash)
+        msg = format_frame('Trash', trash, s, times[s0])
+        logging.debug(msg)
+        if fdebug:
+            fdebug.write(msg + "\n")
+        frames.append((0, s0, trash))
         trash = []
 
 
     # End parse bitstream
-
-    if debugdir:
-        outfile = os.path.join(debugdir, 'bitframes.txt')
-        logging.info("Writing " + outfile)
-        with open(outfile, 'wt') as fout:
-            for type, s, frame in frames:
-                label = "Frame" if type == 1 else "Trash"
-                t = times[s]
-                msg = format_frame(label, frame, s, t) + "\n"
-                fout.write(msg)
+    if fdebug:
+        fdebug.close()
 
 
     return triggertime, frames

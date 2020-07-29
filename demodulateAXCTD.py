@@ -245,10 +245,10 @@ def demodulate_axctd(pcmin, fs, plot=False):
 
     f, Pxx = signal.periodogram(pcmlow, **fftopts)
     Pxx /= np.max(Pxx)
-    print(max(pcm_sq), min(pcm_sq))
-    print(f)
-    print(Pxx)
-    print(np.max(np.abs(Pxx)))
+    #print(max(pcm_sq), min(pcm_sq))
+    #print(f)
+    #print(Pxx)
+    #print(np.max(np.abs(Pxx)))
     if plot:
         fig4, axs4 = plt.subplots(3, 1)
         figures.append(fig4)
@@ -492,10 +492,10 @@ def signal_levels(pcm, fs, fprof, minratio=2.0):
     # When we use mode='magnitude', scale by 20 instead of 10 for power
     # Signal level of data band
     data_db = 20*np.log10(levels[0] / levels[1])
-    data_db -= min(data_db)
+    data_db -= np.min(data_db)
     # signal level of the profile active tone
     active_db = 20*np.log10(levels[2] / levels[1])
-    active_db -= min(active_db)
+    active_db -= np.min(active_db)
     return t, data_db, active_db
 
 
