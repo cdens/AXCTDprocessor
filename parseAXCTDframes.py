@@ -210,7 +210,10 @@ def parse_bitstream_to_profile(bitstream, times, p7500):
             continue
 
         timeout.append(times[s] - triggertime)
-        cT, cC, cS, cz = convertFrame(frame, timeout[-1])
+        
+        Tint, Cint = convertFrameToInt(frame)
+        cT, cC, cS, cz = convertIntsToFloats(Tint, Cint, timeout[-1])
+        
         T.append(cT)
         C.append(cC)
         S.append(cS)
@@ -240,11 +243,17 @@ def generateMasks():
     maskLen = 23 #each mask is 23 bits long
     
     #8 masks per ECC bit
-    maskInts = [[3166839,3167863,3168887,3169911,7360887,7361911,7362935,7363959], #bit 27
-            [553292,554316,555340,556364,4747852,4748876,4749900,4750924], #bit 28
-            [274854,275878,276902,277926,4469414,4470438,4471462,4472486], #bit 29
-            [2233171,2234195,2235219,2236243,6426707,6427731,6428755,6429779], #bit 30
-            [86494,87518,88542,89566,4281054,4282078,4283102,4284126]] #bit 31
+    #maskInts = [[3166839,3167863,3168887,3169911,7360887,7361911,7362935,7363959], #bit 27
+    #        [553292,554316,555340,556364,4747852,4748876,4749900,4750924], #bit 28
+    #        [274854,275878,276902,277926,4469414,4470438,4471462,4472486], #bit 29
+    #        [2233171,2234195,2235219,2236243,6426707,6427731,6428755,6429779], #bit 30
+    #        [86494,87518,88542,89566,4281054,4282078,4283102,4284126]] #bit 31
+            
+    maskInts = [[7363959], #bit 27
+            [4750924], #bit 28
+            [4472486], #bit 29
+            [6429779], #bit 30
+            [4284126]] #bit 31
     
     masks = []
     
@@ -281,14 +290,22 @@ def checkECC(frame, masks):
 #          FRAME CONVERSION TO TEMPERATURE/CONDUCTIVITY/SALINITY/DEPTH            #
 ###################################################################################
 
-def convertFrame(frame, time):
+def convertFrameToInt(frame):
+
+    Tint = binListToInt(frame[14:26])
+    Cint = binListToInt(frame[3:14])
+    
+    return Tint, Cint
+    
+    
+def convertIntsToFloats(Tint, Cint, time):
     
     #depth from time
     z = 0.72 + 2.76124*time - 0.000238007*time**2
     
     #temperature/conductivity from frame
-    T = 0.0107164443 * binListToInt(frame[15:27]) - 5.5387245882
-    C = 0.0153199220 * binListToInt(frame[4:15]) - 0.0622192776
+    T = 0.0107164443 * Tint - 5.5387245882
+    C = 0.0153199220 * Cint - 0.0622192776
     
     #salinity from temperature/conductivity/depth
     if USE_GSW:

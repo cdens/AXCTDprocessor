@@ -46,6 +46,7 @@ def processAXCTD(inputfile, outputdir, plot=False, fromAudio=True):
 
     outputfile = os.path.join(outputdir, 'output.txt')
     demodfile = os.path.join(outputdir, 'demodbitstream.txt')
+    bitfile = os.path.join(outputdir, 'bitstream.txt')
 
     if fromAudio:
         #reading WAV file
@@ -59,24 +60,45 @@ def processAXCTD(inputfile, outputdir, plot=False, fromAudio=True):
             audiostream = snd
         elif ndims == 2: #if two channels
             #audiostream = np.sum(snd,axis=1) #sum them up
-            audiostream = snd[:][0] #use channel 1
-            print(np.shape(snd))
-            print(len(audiostream))
-            exit()
+            audiostream = snd[:,0] #use channel 1
         else:
             print("[!] Error- unexpected number of dimensions in audio file- terminating!")
             exit()
         
-        logging.info("Demodulating audio")
+        logging.info(f"Demodulating audio stream (size {np.shape(audiostream)})")
         #demodulating PCM data
         times, bitstream, signallevel, p7500, figures = \
               demodulateAXCTD.demodulate_axctd(audiostream, fs, plot=plot)
 
-
+        #inverting bitstream
+        invertBitStream = False
+        if invertBitStream:
+            bsnew = []
+            for b in bitstream:
+                if b == 0:
+                    bsnew.append(1)
+                else:
+                    bsnew.append(0)
+            bitstream = bsnew
+              
         #writing test output data to file
         with open(demodfile, 'wt') as f:
             for t, b, sig, prof in zip(times, bitstream, signallevel, p7500):
                 f.write(f"{b},{t:0.6f},{prof:0.3f},{sig:0.3f}\n")
+                
+        #writing bitstream to file (50 columns long)
+        with open(bitfile, 'w') as f:
+            lb = len(bitstream)
+            i = 0
+            il = 0
+            bpline = 50
+            while i < lb:
+                f.write(f"{bitstream[i]}")
+                i +=  1
+                il += 1
+                if il >= bpline:
+                    f.write("\n")
+                    il = 0
 
         for ii, fig in enumerate(figures):
             filename = os.path.join(outputdir, f"{ii+1}_demod.png")
@@ -99,10 +121,8 @@ def processAXCTD(inputfile, outputdir, plot=False, fromAudio=True):
     
     #parsing bitstream to CTD profile
     print("[+] Parsing AXCTD bitstream into frames")
-    #T,C,S,z = parseAXCTDframes.parseBitstreamToProfile(bitstream, times, p7500)
     T, C, S, z, timeout = parseAXCTDframes.parse_bitstream_to_profile(bitstream, times, p7500)
     
-
 
     #writing CTD data to ASCII file
     print("[+] Writing AXCTD data to " + outputfile)
@@ -140,8 +160,8 @@ def processAXCTD(inputfile, outputdir, plot=False, fromAudio=True):
 
 def main():
     parser = argparse.ArgumentParser(description='Demodulate an audio file to text')
-    parser.add_argument('-i', '--input', default='testfiles/sample_full.wav')
-    parser.add_argument('-o', '--output', default='testfiles', help='output directory')
+    parser.add_argument('-i', '--input', default='testfiles/sample_full.wav', help='Input WAV file')
+    parser.add_argument('-o', '--output', default='testfiles', help='Output directory')
     parser.add_argument('--plot', action="store_true", help='Show plots')
     parser.add_argument('-v', '--verbose', action='store_true', help='Enable verbose output')
 
