@@ -41,10 +41,11 @@ import matplotlib.pyplot as plt
 def demodulate_axctd(pcmin, fs, plot=False):
 
     # Change these variables to allow partial file processing for debugging
-    tstart = 0.63 #AXCTD profile starts at 13:43 (length=21:43) therefore 63% of the way in
-    istart = int(fs * tstart)
-    iend = len(pcmin)
-
+    tstart = 823
+    tend = 1200
+    istart = int(fs * tstart) #AXCTD profile starts at 13:43 (length=21:43) therefore 63% of the way in
+    iend = int(fs*tend) #stop profile at 95% completion of audio file
+    #iend = int(len(pcmin))
 
     #basic configuration
     f1 = 400 # bit 1 (mark) = 400 Hz
@@ -81,6 +82,13 @@ def demodulate_axctd(pcmin, fs, plot=False):
 
 
     t1 = np.arange(tstart, sig_endtime, dt)
+    
+    #correcting length issues
+    if len(t1) > len(pcm):
+        t1 = t1[:len(pcm)]
+    elif len(pcm) > len(t1): #this hasn't happened but just in case
+        pcm = pcm[:len(t1)]
+    
     # TODO: make this filter configurable
     # Use bandpass filter to extract digital data only
     #sos = signal.butter(6, [f1 * 0.5, f2 * 1.5], btype='bandpass', fs=fs, output='sos')
@@ -321,7 +329,8 @@ def demodulate_axctd(pcmin, fs, plot=False):
         plt.tight_layout()
 
     # Convert bits analog waveform to actual array of bits. 
-    bits_d = [1 if x > 0 else 0 for x in bits2]
+    #bits_d = [1 if x > 0 else 0 for x in bits2]
+    bits_d = [0 if x > 0 else 1 for x in bits2]
 
     # For QC, calculate how far things are from 0
     # a higher q factor means decoding is better

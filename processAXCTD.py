@@ -69,17 +69,6 @@ def processAXCTD(inputfile, outputdir, plot=False, fromAudio=True):
         #demodulating PCM data
         times, bitstream, signallevel, p7500, figures = \
               demodulateAXCTD.demodulate_axctd(audiostream, fs, plot=plot)
-
-        #inverting bitstream
-        invertBitStream = False
-        if invertBitStream:
-            bsnew = []
-            for b in bitstream:
-                if b == 0:
-                    bsnew.append(1)
-                else:
-                    bsnew.append(0)
-            bitstream = bsnew
               
         #writing test output data to file
         with open(demodfile, 'wt') as f:
