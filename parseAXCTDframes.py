@@ -43,7 +43,7 @@ except ImportError:
 ###################################################################################
 
 
-def parse_bitstream_to_profile(bitstream, times, p7500):
+def parse_bitstream_to_profile(bitstream, times, p7500, p7500thresh):
     
     proftime = []
     T = []
@@ -54,25 +54,10 @@ def parse_bitstream_to_profile(bitstream, times, p7500):
     profframes = [] #good frames matching profile points
     triggertime = None
     
-    p7500thresh = 0.7 #threshold for valid data from power at 7500 Hz
-    masks = generateMasks()
-
-    #identifying end of final long pulse TODO-remove need for this
-    lastPulseInd = 0
-    sumConnectedOnes = 0
-    for i, b in enumerate(bitstream):
-        if b == 1:
-            sumConnectedOnes += 1
-        else:
-            sumConnectedOnes = 0
-            
-        if sumConnectedOnes >= 100:
-            lastPulseInd = i
-                
-    s = lastPulseInd #starts on final 1 bit (starting first '100' frame header)
-    logging.debug("Pulse starts at s={:d} t={:0.6f}".format(s, times[s]))
+    masks = generateMasks()    
     
     #initializing fields for loop
+    s = 0 #starting bit
     numbits = len(bitstream)
     trash = []
     
@@ -95,7 +80,7 @@ def parse_bitstream_to_profile(bitstream, times, p7500):
         
         #once a good frame has been identified, print all trash frames
         if trash:
-            print_frame("               Trash", trash, s, times[s], None)
+            print_frame("               Trash", trash, s, times[s], p7500[s], None)
             frames.append((0, s, trash))
             trash = []
             
@@ -106,7 +91,7 @@ def parse_bitstream_to_profile(bitstream, times, p7500):
         
         if triggertime is None: #profile hasn't been triggered
             frames.append((1, s, frame))
-            print_frame(" Frame (Pre-trigger)", frame, s, times[s], None)
+            print_frame(" Frame (Pre-trigger)", frame, s, times[s], p7500[s], None)
             
         else: #profile has been triggered
             
@@ -129,7 +114,7 @@ def parse_bitstream_to_profile(bitstream, times, p7500):
             z.append(cz)
             
             #printing frame with profile info
-            print_frame("Frame (Post-trigger)", frame, s, times[s], [cz,cT,cC,cS])
+            print_frame("Frame (Post-trigger)", frame, s, times[s], p7500[s], [cz,cT,cC,cS])
             
         #increase start bit by 32 to search for next frame
         s += 32
@@ -139,12 +124,12 @@ def parse_bitstream_to_profile(bitstream, times, p7500):
 
 
 
-def print_frame(label, frame, s, t, data):
+def print_frame(label, frame, s, t, p7500, data):
     framestring = "".join( ['1' if b else '0' for b in frame])
     if data is None:
-        msg = f"{label} s={s:7d}, t={t:12.6f} {framestring:s}"
+        msg = f"{label} s={s:7d}, t={t:12.6f} p={p7500:5.2f} {framestring:s}"
     else:
-        msg = f"{label} s={s:7d}, t={t:12.6f} {framestring:s} z={data[0]:07.2f}, T={data[1]:05.2f}, C={data[2]:05.2f}, S={data[3]:05.2f}"
+        msg = f"{label} s={s:7d}, t={t:12.6f} p={p7500:5.2f} {framestring:s} z={data[0]:07.2f}, T={data[1]:05.2f}, C={data[2]:05.2f}, S={data[3]:05.2f}"
         
     logging.debug(msg)
 

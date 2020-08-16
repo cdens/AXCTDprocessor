@@ -42,7 +42,7 @@ import demodulateAXCTD, parseAXCTDframes
 #                               AXCTD PROCESSING DRIVER                           #
 ###################################################################################
 
-def processAXCTD(inputfile, outputdir, timerange=[0,-1], plot=False):
+def processAXCTD(inputfile, outputdir, timerange=[0,-1], p7500thresh=10, plot=False):
     
     demodfile = outputdir + '_demod.txt'
     bitfile = outputdir + '_bitstream.txt'
@@ -100,7 +100,7 @@ def processAXCTD(inputfile, outputdir, timerange=[0,-1], plot=False):
     
     #parsing bitstream to CTD profile
     logging.info("[+] Parsing AXCTD bitstream into frames")
-    T, C, S, z, proftime, profframes, frames = parseAXCTDframes.parse_bitstream_to_profile(bitstream, times, p7500)
+    T, C, S, z, proftime, profframes, frames = parseAXCTDframes.parse_bitstream_to_profile(bitstream, times, p7500, p7500thresh)
     
     #writing CTD data to ASCII file
     logging.info("[+] Writing AXCTD data to " + outputfile)
@@ -145,6 +145,7 @@ def main():
     parser.add_argument('-o', '--output', default='testfiles/test', help='Output file header')
     parser.add_argument('-s', '--starttime', default='0', help='AXCTD start time in WAV file') #13:43
     parser.add_argument('-e', '--endtime',  default='-1', help='AXCTD end time in WAV file') #20:00
+    parser.add_argument('-p', '--p7500thresh',  default='10', help='Threshold for profile tone') #20
     parser.add_argument('--plot', action="store_true", help='Show plots')
     parser.add_argument('-v', '--verbose', action='store_true', help='Enable verbose output')
     args = parser.parse_args()
@@ -152,8 +153,15 @@ def main():
     #configuring logging level
     loglevel = logging.DEBUG if args.verbose else logging.INFO
     logging.basicConfig(level=loglevel, stream=sys.stdout)
-
+    
     np.set_printoptions(precision=4)
+    
+    #threshold for valid data from power at 7500 Hz
+    try:
+        p7500thresh = float(args.p7500thresh)
+    except ValueError:
+        logging.info("[!] Warning- p7500 threshold must be a floating point number or integer, defaulting to 20")
+        p7500thresh = 20
     
     #reading range of WAV file to parse
     timerange = [0,-1] #default
@@ -193,7 +201,7 @@ def main():
     except ValueError:
         logging.info("[!] Unable to interpret specified end time- defaulting to end of file")
 
-    return processAXCTD(args.input, args.output, timerange, plot=args.plot)
+    return processAXCTD(args.input, args.output, timerange, p7500thresh, plot=args.plot)
 
 
 #MAIN
