@@ -104,7 +104,7 @@ def parseBitstreamToProfile(bitstream, times, p7500):
                     if not triggered:
                         triggered = True
                         triggertime = times[s+m]
-                        print(f"Triggered @ {times[s+m]}s")
+                        logging.debug(f"Triggered @ {times[s+m]}s")
                     timeout.append(times[s+m]-triggertime)
                     cT, cC, cS, cz = convertFrame(cseg[m:m+32], timeout[-1])
                     T.append(cT)

@@ -38,15 +38,18 @@ import matplotlib.pyplot as plt
 ###################################################################################
 
 
-def demodulate_axctd(pcmin, fs, plot=False):
+def demodulate_axctd(pcmin, fs, timerange, plot=False):
 
     # Change these variables to allow partial file processing for debugging
-    tstart = 823
-    tend = 1200
+    tstart = timerange[0]
     istart = int(fs * tstart) #AXCTD profile starts at 13:43 (length=21:43) therefore 63% of the way in
-    iend = int(fs*tend) #stop profile at 95% completion of audio file
-    #iend = int(len(pcmin))
-
+    
+    #how much of audio file to select
+    if timerange[1] == -1:
+        iend = len(pcmin)
+    else:
+        iend = int(fs*timerange[1]) 
+        
     #basic configuration
     f1 = 400 # bit 1 (mark) = 400 Hz
     f2 = 800 # bit 0 (space) = 800 Hz
@@ -61,7 +64,7 @@ def demodulate_axctd(pcmin, fs, plot=False):
     sig_endtime = tstart + sig_time
     
     if istart >= iend:
-        logging.info(f"Start index is after end index!\nStart={istart}, End={iend}")
+        logging.info(f"[!] Start index is after end index!\nStart={istart}, End={iend}")
         exit()
     
     # Normalize amplitude/DC offset of audio signal
@@ -171,10 +174,10 @@ def demodulate_axctd(pcmin, fs, plot=False):
 
     f, Pxx = signal.periodogram(pcmlow, **fftopts)
     Pxx /= np.max(Pxx)
-    print(max(pcm_sq), min(pcm_sq))
-    print(f)
-    print(Pxx)
-    print(np.max(np.abs(Pxx)))
+    #print(max(pcm_sq), min(pcm_sq))
+    #print(f)
+    #print(Pxx)
+    #print(np.max(np.abs(Pxx)))
     if plot:
         fig4, axs4 = plt.subplots(3, 1)
         figures.append(fig4)
