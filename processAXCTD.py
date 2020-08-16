@@ -100,15 +100,14 @@ def processAXCTD(inputfile, outputdir, timerange=[0,-1], plot=False):
     
     #parsing bitstream to CTD profile
     logging.info("[+] Parsing AXCTD bitstream into frames")
-    T, C, S, z, timeout = parseAXCTDframes.parse_bitstream_to_profile(bitstream, times, p7500)
+    T, C, S, z, proftime, profframes, frames = parseAXCTDframes.parse_bitstream_to_profile(bitstream, times, p7500)
     
-
     #writing CTD data to ASCII file
     logging.info("[+] Writing AXCTD data to " + outputfile)
     with open(outputfile, "wt") as f:
         f.write("Depth (m)   Temperature (C)   Conductivity (mS/cm)   Salinity (PSU)\n")
         for (ct, cc, cs, cz) in zip(T, C, S, z):
-            f.write(f"{cz:9.1f}{ct: 15.2f}{cc: 20.2f}{cs: 17.2f}\n")
+            f.write(f"{cz:9.2f}{ct: 15.2f}{cc: 20.2f}{cs: 17.2f}\n")
 
     if plot:
         fig1, axs1 = plt.subplots(1, 3, sharey=True)

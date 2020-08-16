@@ -30,7 +30,7 @@ import logging
 
 import numpy as np
 
-# Can we remove gsw as a dependency?
+# Can we remove gsw as a dependency? -> would need a different way to handle T/C -> S conversion
 try:
     import gsw
     USE_GSW = True
@@ -42,105 +42,22 @@ except ImportError:
 #                               BITSTREAM PARSING                                 #
 ###################################################################################
 
-def parseBitstreamToProfile(bitstream, times, p7500):
-    
-    timeout = []
-    T = []
-    C = []
-    S = []
-    z = []
-    frames = [] # tuple of index, frame
-    triggered = False
-    
-    p7500thresh = 0.7 #threshold for valid data from power at 7500 Hz
-    masks = generateMasks()
-    
-
-
-    #identifying end of final pulse
-    lastPulseInd = 0
-    sumConnectedOnes = 0
-    for i,b in enumerate(bitstream):
-        if b == 1:
-            sumConnectedOnes += 1
-        else:
-            sumConnectedOnes = 0
-            
-        if sumConnectedOnes >= 100:
-            lastPulseInd = i
-                
-    s = lastPulseInd #starts on final 1 bit (starting first '100' frame header)
-    
-    
-    #initializing fields for loop
-    numbits = len(bitstream)
-    isDone = False
-    
-    #looping through bits until finished parsing
-    while not isDone:
-        
-        foundMatch = False
-        
-        if s >= numbits - 45: #won't overrun bitstream
-            isDone = True
-            break
-
-        s -= 2 #back up 2 bits in case one was skipped
-        cseg = bitstream[s:s+40] #grabbing current segment (40 bits -> -2 to 38) to analyze
-            
-        #looking for frame start matches
-        matchinds = []
-        for i in range(16):
-            if cseg[i:i+3] == [1,0,0]:
-                matchinds.append(i)
-                   
-        #trim matches to only get value where ECC conditions are met
-        for m in matchinds:
-            if checkECC(cseg[m:m+32], masks):
-                foundMatch = True
-                
-                if p7500[s+m] >= p7500thresh: #if profile signal detected, ID/append points
-                    
-                    if not triggered:
-                        triggered = True
-                        triggertime = times[s+m]
-                        logging.debug(f"Triggered @ {times[s+m]}s")
-                    timeout.append(times[s+m]-triggertime)
-                    cT, cC, cS, cz = convertFrame(cseg[m:m+32], timeout[-1])
-                    T.append(cT)
-                    C.append(cC)
-                    S.append(cS)
-                    z.append(cz)
-                    
-                break #stop checking subsequent matches
-            
-        #jump to next frame if valid one was identified, otherwise skip forward 16 bits and check again
-        if foundMatch:
-            s += m + 32
-        else:
-            s += 16
-
-    return T, C, S, z, timeout
-
-
 
 def parse_bitstream_to_profile(bitstream, times, p7500):
     
-    timeout = []
+    proftime = []
     T = []
     C = []
     S = []
     z = []
     frames = [] # tuple of index, frame
+    profframes = [] #good frames matching profile points
     triggertime = None
     
     p7500thresh = 0.7 #threshold for valid data from power at 7500 Hz
     masks = generateMasks()
-    
-    # Convert bitstream to a string of characters
-    #bitstream = ''.join(['1' if b else '0' for b in bitstream0])
 
-    #identifying end of final long pulse
+    #identifying end of final long pulse TODO-remove need for this
     lastPulseInd = 0
     sumConnectedOnes = 0
     for i, b in enumerate(bitstream):
@@ -155,7 +72,6 @@ def parse_bitstream_to_profile(bitstream, times, p7500):
     s = lastPulseInd #starts on final 1 bit (starting first '100' frame header)
     logging.debug("Pulse starts at s={:d} t={:0.6f}".format(s, times[s]))
     
-    
     #initializing fields for loop
     numbits = len(bitstream)
     trash = []
@@ -165,68 +81,71 @@ def parse_bitstream_to_profile(bitstream, times, p7500):
         
         foundMatch = False
         
-
         if s >= numbits - 32: #won't overrun bitstream
             break
-
-        # Check pilot tone
+            
+        #pulling current segment
+        frame = bitstream[s:s+32]
+        
+        #verifying that frame meets requirements, otherwise increasing start bit and rechecking
+        if frame[0:3] != [1, 0, 0] or not checkECC(frame, masks):
+            trash.append(frame[0])
+            s += 1
+            continue
+        
+        #once a good frame has been identified, print all trash frames
+        if trash:
+            print_frame("               Trash", trash, s, times[s], None)
+            frames.append((0, s, trash))
+            trash = []
+            
+        # Check pilot tone (after ECC checks so profile triggering requires (1) sufficient P7500 and (2) a valid frame)
         if triggertime is None and p7500[s] >= p7500thresh:
             triggertime = times[s]
             logging.info(f"Triggered @ {triggertime:0.6f} sec")
-
-
-        cseg = bitstream[s:s+32]
-
-        if cseg[0:3] != [1, 0, 0]:
-            trash.append(cseg[0])
-            s += 1
-            continue
-
-
-        if False and not checkECC(cseg, masks):
-            trash.append(cseg[0])
-            s += 1
-            continue
-
-        if trash:
-            print_frame("Trash", trash, s, times[s])
-            frames.append((0, s, trash))
-            trash = []
-
-        frames.append((1, s, cseg))
-        print_frame("Frame", cseg, s, times[s])
+        
+        if triggertime is None: #profile hasn't been triggered
+            frames.append((1, s, frame))
+            print_frame(" Frame (Pre-trigger)", frame, s, times[s], None)
+            
+        else: #profile has been triggered
+            
+            #current profile time
+            ctime = times[s] - triggertime
+            
+            #converting frame to T/C/S/z
+            Tint, Cint = convertFrameToInt(frame)
+            cT, cC, cS, cz = convertIntsToFloats(Tint, Cint, ctime)
+            
+            #storing frame/time
+            frames.append((2, s, frame))
+            profframes.append(frame)
+            proftime.append(ctime)
+            
+            #storing values for profile
+            T.append(cT)
+            C.append(cC)
+            S.append(cS)
+            z.append(cz)
+            
+            #printing frame with profile info
+            print_frame("Frame (Post-trigger)", frame, s, times[s], [cz,cT,cC,cS])
+            
+        #increase start bit by 32 to search for next frame
         s += 32
 
     # End parse bitstream
+    return T, C, S, z, proftime, profframes, frames
 
 
-    # Parse frames into science data
-    for type, s, frame in frames:
-        if type == 0:
-            continue
 
-        # For now, don't do frames before the trigger time
-        if times[s] < triggertime:
-            continue
-
-        timeout.append(times[s] - triggertime)
+def print_frame(label, frame, s, t, data):
+    framestring = "".join( ['1' if b else '0' for b in frame])
+    if data is None:
+        msg = f"{label} s={s:7d}, t={t:12.6f} {framestring:s}"
+    else:
+        msg = f"{label} s={s:7d}, t={t:12.6f} {framestring:s} z={data[0]:07.2f}, T={data[1]:05.2f}, C={data[2]:05.2f}, S={data[3]:05.2f}"
         
-        Tint, Cint = convertFrameToInt(frame)
-        cT, cC, cS, cz = convertIntsToFloats(Tint, Cint, timeout[-1])
-        
-        T.append(cT)
-        C.append(cC)
-        S.append(cS)
-        z.append(cz)
-    # TODO: return frames
-
-    return T, C, S, z, timeout
-
-
-
-def print_frame(label, cseg, s, t):
-    sseg = "".join( ['1' if b else '0' for b in cseg])
-    msg = "{:s} s={:10d}, t={:12.6f} {:s}".format(label, s, t, sseg)
     logging.debug(msg)
 
 
@@ -236,25 +155,18 @@ def print_frame(label, cseg, s, t):
 ###################################################################################
 
 
-
 #  GENERATING ECC MASKS FOR FRAME PARSING  
 def generateMasks():
     
     maskLen = 23 #each mask is 23 bits long
     
     #8 masks per ECC bit
-    #maskInts = [[3166839,3167863,3168887,3169911,7360887,7361911,7362935,7363959], #bit 27
-    #        [553292,554316,555340,556364,4747852,4748876,4749900,4750924], #bit 28
-    #        [274854,275878,276902,277926,4469414,4470438,4471462,4472486], #bit 29
-    #        [2233171,2234195,2235219,2236243,6426707,6427731,6428755,6429779], #bit 30
-    #        [86494,87518,88542,89566,4281054,4282078,4283102,4284126]] #bit 31
+    maskInts = [[3166839,3167863,3168887,3169911,7360887,7361911,7362935,7363959], #bit 27
+            [553292,554316,555340,556364,4747852,4748876,4749900,4750924], #bit 28
+            [274854,275878,276902,277926,4469414,4470438,4471462,4472486], #bit 29
+            [2233171,2234195,2235219,2236243,6426707,6427731,6428755,6429779], #bit 30
+            [86494,87518,88542,89566,4281054,4282078,4283102,4284126]] #bit 31
             
-    maskInts = [[7363959], #bit 27
-            [4750924], #bit 28
-            [4472486], #bit 29
-            [6429779], #bit 30
-            [4284126]] #bit 31
-    
     masks = []
     
     for cMaskInts in maskInts:
@@ -274,8 +186,8 @@ def checkECC(frame, masks):
     if sum(frame)%2 != 0: #if parity isn't even
         return False
         
-    data = np.asarray(frame[4:27]) #data ECC applies to
-    ecc = frame[27:32] #ECC bits
+    data = np.asarray(frame[3:26]) #data ECC applies to
+    ecc = frame[26:31] #ECC bits
     
     for (bitMasks, bit) in zip(masks, ecc): #checking masks for each ECC bit
         for mask in bitMasks: #loops through all 8 masks for each bit
