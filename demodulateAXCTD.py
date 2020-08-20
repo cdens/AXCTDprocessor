@@ -38,19 +38,22 @@ import matplotlib.pyplot as plt
 ###################################################################################
 
 
-
-def demodulate_axctd(pcmin, fs, plot=False):
+def demodulate_axctd(pcmin, fs, timerange, plot=False):
     """ 
     Note for the future: We could probably adapt the code here for a realtime algorithm:
     https://github.com/EliasOenal/multimon-ng/blob/master/demod_afsk12.c
     """
 
     # Change these variables to allow partial file processing for debugging
-    tstart = 0.01
-    istart = int(fs * tstart)
-    iend = len(pcmin)
-
-
+    tstart = timerange[0]
+    istart = int(fs * tstart) #AXCTD profile starts at 13:43 (length=21:43) therefore 63% of the way in
+    
+    #how much of audio file to select
+    if timerange[1] == -1:
+        iend = len(pcmin)
+    else:
+        iend = int(fs*timerange[1]) 
+        
     #basic configuration
     f1 = 400 # bit 1 (mark) = 400 Hz
     f2 = 800 # bit 0 (space) = 800 Hz
@@ -63,8 +66,11 @@ def demodulate_axctd(pcmin, fs, plot=False):
     len_pcm = iend - istart # number of samples
     sig_time = len_pcm * dt # signal time duration
     sig_endtime = tstart + sig_time
-
-    assert istart < iend
+    
+    if istart >= iend:
+        logging.info(f"[!] Start index is after end index!\nStart={istart}, End={iend}")
+        exit()
+    
     # Normalize amplitude/DC offset of audio signal
     pcm_dc = np.mean(pcmin[istart:iend])
     pcm_ampl = np.max(np.abs(pcmin[istart:iend]))
@@ -83,6 +89,13 @@ def demodulate_axctd(pcmin, fs, plot=False):
 
 
     t1 = np.arange(tstart, sig_endtime, dt)
+    
+    #correcting length issues
+    if len(t1) > len(pcm):
+        t1 = t1[:len(pcm)]
+    elif len(pcm) > len(t1): #this hasn't happened but just in case
+        pcm = pcm[:len(t1)]
+    
     # TODO: make this filter configurable
     # Use bandpass filter to extract digital data only
     #sos = signal.butter(6, [f1 * 0.5, f2 * 1.5], btype='bandpass', fs=fs, output='sos')
@@ -355,8 +368,9 @@ def demodulate_axctd(pcmin, fs, plot=False):
 
         plt.tight_layout()
 
-    # Convert bits analog waveform to actual array of bits for a bitstring
-    bits_d = ''.join(['1' if x > 0 else '0' for x in bits2])
+    # Convert bits analog waveform to actual array of bits. 
+    #bits_d = [1 if x > 0 else 0 for x in bits2]
+    bits_d = [0 if x > 0 else 1 for x in bits2]
 
     # For QC, calculate how far things are from 0
     # a higher q factor means decoding is better

@@ -42,7 +42,11 @@ import demodulateAXCTD, parseAXCTDframes
 #                               AXCTD PROCESSING DRIVER                           #
 ###################################################################################
 
-def processAXCTD(inputfile, outputdir, plot=False, fromAudio=True, ecc=True):
+def processAXCTD(inputfile, outputdir, timerange=[0,-1], p7500thresh=10, plot=False):
+    
+    demodfile = outputdir + '_demod.txt'
+    bitfile = outputdir + '_bitstream.txt'
+    outputfile = outputdir + '_profile.txt'
 
     outputfile = os.path.join(outputdir, 'output.txt')
     demodfile = os.path.join(outputdir, 'demodbitstream.txt')
@@ -146,12 +150,14 @@ def processAXCTD(inputfile, outputdir, plot=False, fromAudio=True, ecc=True):
             ax.grid(True)
         plt.tight_layout()
 
-        filename = os.path.join(outputdir, "ctd.png")
         logging.info("Saving " + filename)
-        fig1.savefig(filename)
+        fig1.savefig(os.path.join(outputdir, "ctd.png"))
 
     if plot:
+        logging.info("Displaying plots (close to terminate program)")
         plt.show()
+        
+    return 0
 
 
 ###################################################################################
@@ -163,21 +169,66 @@ def processAXCTD(inputfile, outputdir, plot=False, fromAudio=True, ecc=True):
 def main():
     parser = argparse.ArgumentParser(description='Demodulate an audio file to text')
     parser.add_argument('-i', '--input', default='testfiles/sample_full.wav', help='Input WAV file')
-    parser.add_argument('-o', '--output', default='testfiles', help='Output directory')
+    parser.add_argument('-o', '--output', default='testfiles/test', help='Output file prefix')
+    parser.add_argument('-s', '--starttime', default='0', help='AXCTD start time in WAV file') #13:43
+    parser.add_argument('-e', '--endtime',  default='-1', help='AXCTD end time in WAV file') #20:00
+    parser.add_argument('-p', '--p7500thresh',  default='10', help='Threshold for profile tone') #20
     parser.add_argument('--plot', action="store_true", help='Show plots')
-    parser.add_argument('--ecc', action="store_true", help='Do ECC checks')
     parser.add_argument('-v', '--verbose', action='store_true', help='Enable verbose output')
-
     args = parser.parse_args()
-
+    
+    #configuring logging level
     loglevel = logging.DEBUG if args.verbose else logging.INFO
     logging.basicConfig(level=loglevel, stream=sys.stdout)
-
-    if not os.path.exists(args.output):
-        os.makedirs(args.output)
+    
     np.set_printoptions(precision=4)
+    
+    #threshold for valid data from power at 7500 Hz
+    try:
+        p7500thresh = float(args.p7500thresh)
+    except ValueError:
+        logging.info("[!] Warning- p7500 threshold must be a floating point number or integer, defaulting to 20")
+        p7500thresh = 20
+    
+    #reading range of WAV file to parse
+    timerange = [0,-1] #default
+    
+    #start time
+    try:
+        if ":" in args.starttime: #format is HH:MM:SS 
+            s = 0
+            for i,val in enumerate(reversed(args.starttime.split(":"))):
+                if i <= 2: #only works up to hours place
+                    s += int(val)*60**i
+                else:
+                    logging.info("[!] Warning- ignoring all start time information past the hours place (HH:MM:SS)")
+                    
+            timerange[0] = s
+            
+        else:
+            timerange[0] = int(args.starttime)
+            
+    except ValueError:
+        logging.info("[!] Unable to interpret specified start time- defaulting to 00:00")
+        
+    #end time
+    try:
+        if ":" in args.endtime: #format is HH:MM:SS 
+            e = 0
+            for i,val in enumerate(reversed(args.endtime.split(":"))):
+                if i <= 2: #only works up to hours place
+                    e += int(val)*60**i
+                else:
+                    logging.info("[!] Warning- ignoring all end time information past the hours place (HH:MM:SS)")
+                    
+            timerange[1] = e
+        else:
+            timerange[1] = int(args.endtime)
+        
+    except ValueError:
+        logging.info("[!] Unable to interpret specified end time- defaulting to end of file")
 
-    return processAXCTD(args.input, args.output, plot=args.plot, ecc=args.ecc)
+    return processAXCTD(args.input, args.output, timerange, p7500thresh, plot=args.plot)
 
 
 #MAIN

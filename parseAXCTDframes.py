@@ -34,7 +34,7 @@ from collections import namedtuple
 
 import numpy as np
 
-# Can we remove gsw as a dependency?
+# Can we remove gsw as a dependency? -> would need a different way to handle T/C -> S conversion
 try:
     import gsw
     USE_GSW = True
