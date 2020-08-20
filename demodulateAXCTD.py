@@ -124,6 +124,10 @@ def demodulateAXCTD0(pcm, fs):
 
 
 def demodulate_axctd(pcmin, fs, plot=False):
+    """ 
+    Note for the future: We could probably adapt the code here for a realtime algorithm:
+    https://github.com/EliasOenal/multimon-ng/blob/master/demod_afsk12.c
+    """
 
     # Change these variables to allow partial file processing for debugging
     tstart = 0.01
@@ -148,7 +152,7 @@ def demodulate_axctd(pcmin, fs, plot=False):
     # Normalize amplitude/DC offset of audio signal
     pcm_dc = np.mean(pcmin[istart:iend])
     pcm_ampl = np.max(np.abs(pcmin[istart:iend]))
-    pcm = (pcmin[istart:iend] - pcm_dc) / pcm_ampl
+    pcm = (pcmin[istart:iend].astype(np.float) - pcm_dc) / pcm_ampl
     logging.info("PCM signal length: {:d} samples, {:0.3f} seconds"
                  "".format(len_pcm, sig_time))
 
@@ -192,6 +196,8 @@ def demodulate_axctd(pcmin, fs, plot=False):
 
     t2, data_db, active_db = signal_levels(pcm, fs=fs, fprof=fprof)
     t2 += tstart
+    # Do quadrature demodulation (experimental)
+    doquad = False
 
     if plot:
         axs2[2].plot(t2, data_db, label='Data')
@@ -232,7 +238,11 @@ def demodulate_axctd(pcmin, fs, plot=False):
     # downconvert and lowpass filter
     fcarrier = np.exp(2*np.pi*1j*-fc*t1)
     # TODO: make the downconversion filter frequency configurable
-    sosdcx = signal.butter(4, fc*0.6, btype='lowpass', fs=fs, output='sos')
+    if doquad:
+        sosdcx = signal.butter(9, fc*0.5, btype='lowpass', fs=fs, output='sos')
+    else:
+        sosdcx = signal.butter(4, fc*0.6, btype='lowpass', fs=fs, output='sos')
+
     pcmiq = signal.sosfilt(sosdcx, fcarrier * pcmlow)
     pcmiq /= np.max(np.abs(pcmiq))
     pcmiq *= squelch_mask_t1
@@ -300,24 +310,46 @@ def demodulate_axctd(pcmin, fs, plot=False):
         axs4[2].legend()
         plt.tight_layout()
 
+    if doquad:
+        # Rather than matched filtering we should do quadrature demodulation
+        fdev = 200
+        phs_to_hz = fs / (2*np.pi)
+        pcmiq_phs = np.unwrap(np.angle(pcmiq))
+        # calculate instantaneous frequency
+        # now that we have instant frequency should we do some averaging or downsampling?
+        # or do we differentiate then LPF?
+        # There are some quick phase shifts sometimes
+        qdemod = np.gradient(pcmiq_phs) * phs_to_hz
+        #qdemod = diff_smoothed(pcmiq_phs, 49) * phs_to_hz # downsample to 900 Hz
+        qdemod -= np.mean(qdemod)
+        #qdemod /= 400
 
-    # Perform matched filtering with complex IQ data
-    # TODO: I can probably downsample by a factor of 4 (from 44 KHz to 11 KHz)
-    # this doesn't seem to work yet
-    decimate = 1
-    kernel_len = fs // bitrate
-    tkern = np.arange(0.0, kernel_len/bitrate, 1.0/bitrate)
-    y1 = np.exp(2*np.pi*1j*(f1-fc)*tkern)
-    corr_f1 = np.abs(signal.correlate(pcmiq[::decimate], y1[::decimate], mode='same'))
-    # Can we figure out if there's a frequency offset?
-    y2 = np.exp(2*np.pi*1j*(f2-fc)*tkern)
-    corr_f2 = np.abs(signal.correlate(pcmiq[::decimate], y2[::decimate], mode='same'))
-    corr_f1 /= np.max(corr_f1)
-    corr_f2 /= np.max(corr_f2)
+        # LPF this signal
+        sos = signal.butter(6, 800, btype='lowpass', fs=fs, output='sos')
+        #sos = signal.cheby1(6, 0.1, 1200, btype='lowpass', fs=fs, output='sos')
+        qdemod = signal.sosfilt(sos, qdemod)
 
 
+        corr = np.clip((qdemod * squelch_mask_t1) / fdev, -2, 2)
+        #corr = qdemod * squelch_mask_t1
+        decimate = 1
+    else:
+        # Perform matched filtering with complex IQ data
+        # TODO: I can probably downsample by a factor of 4 (from 44 KHz to 11 KHz)
+        # this doesn't seem to work yet
+        decimate = 1
+        kernel_len = fs // bitrate
+        tkern = np.arange(0.0, kernel_len/bitrate, 1.0/bitrate)
+        y1 = np.exp(2*np.pi*1j*(f1-fc)*tkern)
+        corr_f1 = np.abs(signal.correlate(pcmiq[::decimate], y1[::decimate], mode='same'))
+        # Can we figure out if there's a frequency offset?
+        y2 = np.exp(2*np.pi*1j*(f2-fc)*tkern)
+        corr_f2 = np.abs(signal.correlate(pcmiq[::decimate], y2[::decimate], mode='same'))
+        corr_f1 /= np.max(corr_f1)
+        corr_f2 /= np.max(corr_f2)
+        corr = corr_f2 - corr_f1
 
-    corr = corr_f2 - corr_f1
+
     fcorr = interpolate.interp1d(t1[::decimate], corr, fill_value=0.0, bounds_error=False)
 
     if plot:
@@ -327,7 +359,7 @@ def demodulate_axctd(pcmin, fs, plot=False):
         lineopts = {'linewidth': 0.75}
         markeropts = {'marker':'x', 'linewidth': 0}
 
-        fig3, axs3 = plt.subplots(3, 1, sharex=True)
+        fig3, axs3 = plt.subplots(4, 1, sharex=True)
         figures.append(fig3)
         axs3[0].plot(t1[::decimate], corr, label='dcorrelation', **lineopts)
         axs3[0].plot(tbits0, bits0, **markeropts)
@@ -335,6 +367,11 @@ def demodulate_axctd(pcmin, fs, plot=False):
         #axs2[1].legend()
         axs3[0].set_xlabel('Time [sec]')
         axs3[0].set_title('Sample Matched Filter Waveform Naively')
+
+        if doquad:
+            axs3[3].plot(t1[::decimate], pcmiq_phs / (np.pi * 2), label='phase')
+            axs3[3].grid(True)
+            axs3[3].set_ylabel('Cycles')
 
 
     # edge-filtered
@@ -437,6 +474,26 @@ def demodulate_axctd(pcmin, fs, plot=False):
 
     return list(tbits2), bits_d, list(data_db2), list(active_db2), figures
 
+
+
+def diff_smoothed(sig, navg):
+    """ Calculates the smoothed derivative by taking points that are further apart
+    Note: I haven't paid particuarly accurate attention to being centered on the sample
+    """
+    assert navg > 0
+    y = np.empty_like(sig)
+    p2 = navg // 2
+    p1 = navg - p2
+    if p2 > 0:
+        y[p1:-p2] = (sig[navg:] - sig[:-navg]) / navg
+        assert len(y) > (p2+1)
+        y[-p2:] = y[-(p2+1)] # copy last derivative
+    else:
+        y[p1:] = (sig[navg:] - sig[:-navg]) / navg
+    # copy leftmost derivative
+    y[0:p1] = sig[p1] # assert p1 > 0
+
+    return y
 
 def schmitt_trigger(wfm, fast=False):
     """ Transition debouncing
