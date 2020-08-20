@@ -26,8 +26,11 @@
 #                                    IMPORTS                                      #
 ###################################################################################
 
-import logging
 import os
+import sys
+import logging
+import argparse
+from collections import namedtuple
 
 import numpy as np
 
@@ -291,11 +294,18 @@ def format_frame(label, cseg, s, t, frame_parity, frame_ecc, triggertime):
     if label == 'Frame':
         token_parity = 'PAR_OK ' if frame_parity else 'PAR_BAD'
         token_ecc    = 'ECC_OK ' if frame_parity else 'ECC_BAD'
-        token_hex    = "{:08x}".format(int(cseg, 2))
+        x1, x2 = int(cseg, 2), int(cseg[::-1], 2)
+        token_hex    = "{:08X} {:08X}".format(x1, x2)
     else:
         token_parity = '-      '
         token_ecc    = '-      '
-        token_hex = '--------'
+        token_hex = '-------- --------'
+        # cut last frame into 32-bit words
+        delim = "\n" + ' ' * len("Trash t=    0.010625, t'=      -1.289, s=      0, len= 40,-      ,-      ,-------- --------,")
+        s2 = delim.join(cseg[i:i+32] for i in range(0, len(cseg), 32))
+        cseg = s2
+        
+
     return "{:s} t={:12.6f}, t'={:12.3f}, s={:7d}, len={:3},{:s},{:s},{:s},{:s}" \
            "".format(label, t, t2, s, len(cseg), token_parity, token_ecc, token_hex, cseg)
 
@@ -425,18 +435,55 @@ def test_ecc():
 #          FRAME CONVERSION TO TEMPERATURE/CONDUCTIVITY/SALINITY/DEPTH            #
 ###################################################################################
 
+def unpack_frame_b(frame_b):
+    #t_int = bitstring_to_int(frame[16:26])
+    #t_int = (frame_b >> 16) & 0x3ff
+    # after some reverse engineering
+    t_int = (frame_b >> 6) & 0x3ff  # frame[6:16]
+    #t_int = (frame_b >> (32-6)) & 0x1ff # frame 6:15]
+    #logging.debug("frame={0:08x} {0:032b} {0:5d}".format(frame_b))
+    #logging.debug("t_int={0:03x} {0:09b} {0:5d}".format(t_int))
+    
+    #c_int = bitstring_to_int(frame[ 5:14])
+    c_int = (frame_b >> 18) & 0x7ff # frame[28:18] (bit notation)
+    logging.debug("frame={0:08x} {0:032b} {0:5d}".format(frame_b))
+    logging.debug("c_int={0:03x} {0:09b} {0:5d}".format(c_int))
+
+    return t_int, c_int
+
+def convert_frame(time, t_int, c_int):
+    
+    #depth from time
+    z = 0.72 + 2.76124*time - 0.000238007*time**2
+    
+    T = 0.0107164443 * t_int - 5.5387245882
+    C = 0.0153199220 * c_int - 0.0622192776
+
+
+    #salinity from temperature/conductivity/depth
+    if USE_GSW:
+        S = gsw.SP_from_C(C,T,z) #assumes pressure (mbar) approx. equals depth (m)
+    else:
+        S = float('nan')
+    logging.debug(f"{time:0.3f} {t_int} {T} ; {c_int} {C}")
+    
+    return T, C, S, z
+
+    
+
 def convertFrame(frame, time):
     
     #depth from time
     z = 0.72 + 2.76124*time - 0.000238007*time**2
     
     #temperature/conductivity from frame as an integer
-    t_int = bitstring_to_int(frame[15:27])
-    c_int = bitstring_to_int(frame[ 4:15])
+    t_int = bitstring_to_int(frame[16:26])
+    c_int = bitstring_to_int(frame[ 5:14])
 
-    T = 0.0107164443 * t_int - 5.5387245882
-    C = 0.0153199220 * c_int - 0.0622192776
-    
+    #T = 0.0107164443 * t_int - 5.5387245882
+    #C = 0.0153199220 * c_int - 0.0622192776
+    T = t_int
+    C = c_int
     
     #salinity from temperature/conductivity/depth
     if USE_GSW:
@@ -509,12 +556,133 @@ def test_intbin():
             y = binListToInt(listbits)
             assert x == y
 
-        
 
+def parse_xctd_debug(infile):
 
+    # 348 9C6888BC 9C688928 10011100011010001000100010111100 10011100011010001000100100101000 00 00
+    # 349 9C688813 9C6C88E7 10011100011010001000100000010011 10011100011011001000100011100111 00 00
+    #     10011100100000001000100000001101       0      //           0          //          //     544    
+    #     1824     0.28344871     0.28344871     0.28344871      27.881318      27.881318      27.894723
+    fieldnames = 'n hex1 hex2 bin1 bin2 f5 f6 bin3 f7 f8 f9 f10 f11 t_int c_int t1 t2 t3 c1 c2 c3'
+    nfields = len(fieldnames.split())
+    XCTDRawFrame = namedtuple('XCTDRawFrame', fieldnames)
+    logging.info("Reading " + infile)
+    state = 'skip'
+    with open(infile, 'rt') as fin:
+        for jj, line in enumerate(fin):
+            line = line.strip()
+            if state == 'skip':
+                if '**** Raw XCTD Frames' in line:
+                    state = 'save'
+                continue
+            assert state == 'save'
+            fields = line.strip().split()
+            if not fields:
+                continue
+
+            parse_err = False
+            fields[0] = int(fields[0]) # convert to int
+            if len(fields) >= 15:
+                for ii in (13, 14):
+                    try:
+                        fields[ii] = int(fields[ii])
+                    except ValueError:
+                        parse_err = True
+                        pass
+            if len(fields) >= 21:
+                for ii in range(15, 21):
+                    try:
+                        fields[ii] = float(fields[ii])
+                    except ValueError:
+                        parse_err = True
+                        pass
+                        fields[ii] = float('nan')
+
+            # Add enough fields so that things will work.
+            if len(fields) < nfields:
+                fields.extend([None] * (nfields - len(fields)))
+
+            if parse_err:
+                logging.error("Error parsing line {:d}: {:s}".format(jj+1, line))
+
+            yield XCTDRawFrame._make(fields)
+
+            
 def main():
-    test_intbin()
-    test_ecc()
+
+    parser = argparse.ArgumentParser(description='Test frame parsing algorithms')
+    parser.add_argument('-i', '--input', help='Input xctd_debug file')
+    parser.add_argument('-o', '--output', default='testfiles', help='output directory')
+    parser.add_argument('--test', action="store_true", help='Perform self test')
+    #parser.add_argument('--plot', action="store_true", help='Show plots')
+    parser.add_argument('-v', '--verbose', action='store_true', help='Enable verbose output')
+
+    args = parser.parse_args()
+
+    loglevel = logging.DEBUG if args.verbose else logging.INFO
+    logging.basicConfig(level=loglevel, stream=sys.stdout)
+
+    np.set_printoptions(precision=4)
+
+    if args.test:
+        test_intbin()
+        test_ecc()
+        return 0;
+
+    for jj, rec in enumerate(parse_xctd_debug(args.input)):
+        recnum = rec.n
+        logging.debug(f"[{recnum:5d}] Start")
+        try:
+            frame1 = int(rec.bin3, 2)
+            int(rec.t_int)
+        except (TypeError, ValueError):
+            # parsing error
+            print(rec)
+            continue
+        unpack3 = unpack_frame_b(frame1)
+        unpack2 = unpack_frame_b(int(rec.hex2, 16))
+        print(rec)
+
+        nomatch = True
+
+        # Check correspondence between hex and bin
+        hex1, hex2 = int(rec.hex1, 16), int(rec.hex2, 16)
+        bin1, bin2, bin3 = int(rec.bin1, 2), int(rec.bin2, 2), int(rec.bin3, 2)
+
+
+        #print(f"hex1={hex1:08X} hex2={hex2:08X} bin1={bin1:08X} bin2={bin2:08X} bin3={bin3:08X}")
+        assert hex1 == bin1
+        assert hex2 == bin2
+
+        """ 
+        frame1 = int(rec.bin3, 2)
+        for bitwidth in range(8, 16):
+            for bit0 in range(0, 32 - bitwidth):
+                # mask off field
+                mask = (1 << (bitwidth+1)) - 1
+                x = (frame1 >> bit0) & mask
+
+                if x == rec.c_int:
+                    reversestr = '   ' #reversestr = "rev" if reverse else "fwd"
+                    print(f"[{recnum:5d}] Matched {frame1:032b} {frame1:08X} mask={mask:08X} frame1[{bit0:d}:{bitwidth+bit0:d}]"
+                          f" {rec.c_int:09b}=0x{rec.c_int:03x}={rec.c_int:d} {reversestr:s}")
+                    nomatch = False
+        if isinstance(rec.c_int, int) and nomatch:
+            print("No Match {:08X} frame1[{:d}:{:d}] 0x{:x}={:d} {:s}"
+                  "".format(frame1, 0, 0, rec.c_int, rec.c_int, ''))
+        """
+
+        print(f'[{recnum:5d}]  - unpack3: {unpack1} {rec.t_int} {rec.c_int}')
+        assert unpack3[0] == rec.t_int and unpack3[1] == rec.c_int 
+        print(f'[{recnum:5d}]  - unpack2: {unpack2} {rec.t_int} {rec.c_int}')
+        #assert unpack2[0] == rec.t_int and unpack2[1] == rec.c_int 
+
+
+        # fields to floats
+        T, C, S, z =  convert_frame(0, *unpack1)
+        print(f'[{recnum:5d}] unpack1 {T:08f} {C:08f} {S:08f} {z}')
+        T, C, S, z =  convert_frame(0, *unpack2)
+        print(f'[{recnum:5d}] unpack2 {T:08f} {C:08f} {S:08f} {z}')
 
 
 if __name__ == "__main__":
