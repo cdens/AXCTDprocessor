@@ -46,23 +46,22 @@ def processAXCTD(inputfile, outputdir, plot=False, fromAudio=True, ecc=True):
 
     outputfile = os.path.join(outputdir, 'output.txt')
     demodfile = os.path.join(outputdir, 'demodbitstream.txt')
+    demodfile2 = os.path.join(outputdir, 'demodbitstream2.txt')
 
     if fromAudio:
         #reading WAV file
         print("[+] Reading audio file")
         fs, snd = wavfile.read(inputfile)
         
-        #if multiple channels, sum them together
         sndshape = np.shape(snd) #array size (tuple)
         ndims = len(sndshape) #number of dimensions
         if ndims == 1: #if one channel, use that
             audiostream = snd
         elif ndims == 2: #if two channels
-            #audiostream = np.sum(snd,axis=1) #sum them up
-            audiostream = snd[:][0] #use channel 1
-            print(np.shape(snd))
-            print(len(audiostream))
-            exit()
+            audiostream = np.sum(snd, axis=1) #sum them up
+            #audiostream = snd[:][0] #use channel 1
+            logging.warning(f"WAV file contains stereo data. Summing channels. shape = {audiostream.shape}")
+            #exit()
         else:
             print("[!] Error- unexpected number of dimensions in audio file- terminating!")
             exit()
@@ -77,6 +76,12 @@ def processAXCTD(inputfile, outputdir, plot=False, fromAudio=True, ecc=True):
         with open(demodfile, 'wt') as f:
             for t, b, sig, prof in zip(times, bitstream, signallevel, p7500):
                 f.write(f"{b},{t:0.6f},{prof:0.3f},{sig:0.3f}\n")
+
+        # Write 32-bit groups only to a second debug file
+        with open(demodfile2, 'wt') as f:
+            for ii in range(0, len(bitstream), 32):
+                jj = min(ii+32, len(bitstream))
+                f.write(bitstream[ii:jj] + "\n")
 
         for ii, fig in enumerate(figures):
             filename = os.path.join(outputdir, f"{ii+1}_demod.png")
