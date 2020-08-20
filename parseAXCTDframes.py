@@ -110,7 +110,10 @@ def parseBitstreamToProfile(bitstream, times, p7500):
                         triggertime = times[s+m]
                         print(f"Triggered @ {times[s+m]}s")
                     timeout.append(times[s+m]-triggertime)
-                    cT, cC, cS, cz = convertFrame(cseg[m:m+32], timeout[-1])
+                    
+                    Tint, Cint = convertFrameToInt(frame)
+                    cT, cC, cS, cz = convertIntsToFloats(Tint, Cint, timeout[-1])
+
                     T.append(cT)
                     C.append(cC)
                     S.append(cS)
@@ -471,27 +474,28 @@ def convert_frame(time, t_int, c_int):
 
     
 
-def convertFrame(frame, time):
-    
+def convertFrameToInt(frame, time):
+
+    Tint = binListToInt(frame[14:26])
+    Cint = binListToInt(frame[3:14])
+
+    return Tint, Cint
+
+
+def convertIntsToFloats(Tint, Cint, time):
     #depth from time
     z = 0.72 + 2.76124*time - 0.000238007*time**2
-    
-    #temperature/conductivity from frame as an integer
-    t_int = bitstring_to_int(frame[16:26])
-    c_int = bitstring_to_int(frame[ 5:14])
 
-    #T = 0.0107164443 * t_int - 5.5387245882
-    #C = 0.0153199220 * c_int - 0.0622192776
-    T = t_int
-    C = c_int
-    
+    T = 0.0107164443 * Tint - 5.5387245882
+    C = 0.0153199220 * Tint - 0.0622192776
+
     #salinity from temperature/conductivity/depth
     if USE_GSW:
         S = gsw.SP_from_C(C,T,z) #assumes pressure (mbar) approx. equals depth (m)
     else:
         S = float('nan')
     logging.debug(f"{time:0.3f} {t_int} {T} ; {c_int} {C}")
-    
+
     return T, C, S, z
 
 
