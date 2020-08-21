@@ -46,271 +46,96 @@ except ImportError:
 #                               BITSTREAM PARSING                                 #
 ###################################################################################
 
-def parseBitstreamToProfile(bitstream, times, p7500):
+
+def parse_bitstream_to_profile(bitstream, times, p7500, p7500thresh):
     
-    timeout = []
+    proftime = []
     T = []
     C = []
     S = []
     z = []
     frames = [] # tuple of index, frame
-    triggered = False
+    profframes = [] #good frames matching profile points
+    triggertime = None
     
-    p7500thresh = 0.7 #threshold for valid data from power at 7500 Hz
-    masks = generateMasks()
-    
-
-
-    #identifying end of final pulse
-    lastPulseInd = 0
-    sumConnectedOnes = 0
-    for i,b in enumerate(bitstream):
-        if b == 1:
-            sumConnectedOnes += 1
-        else:
-            sumConnectedOnes = 0
-            
-        if sumConnectedOnes >= 100:
-            lastPulseInd = i
-                
-    s = lastPulseInd #starts on final 1 bit (starting first '100' frame header)
-    
+    masks = generateMasks()    
     
     #initializing fields for loop
+    s = 0 #starting bit
     numbits = len(bitstream)
-    isDone = False
+    trash = []
     
     #looping through bits until finished parsing
-    while not isDone:
+    while True:
         
         foundMatch = False
         
-        if s >= numbits - 45: #won't overrun bitstream
-            isDone = True
+        if s >= numbits - 32: #won't overrun bitstream
             break
-
-        s -= 2 #back up 2 bits in case one was skipped
-        cseg = bitstream[s:s+40] #grabbing current segment (40 bits -> -2 to 38) to analyze
             
-        #looking for frame start matches
-        matchinds = []
-        for i in range(16):
-            if cseg[i:i+3] == [1,0,0]:
-                matchinds.append(i)
-                   
-        #trim matches to only get value where ECC conditions are met
-        for m in matchinds:
-            if checkECC(cseg[m:m+32], masks):
-                foundMatch = True
-                
-                if p7500[s+m] >= p7500thresh: #if profile signal detected, ID/append points
-                    
-                    if not triggered:
-                        triggered = True
-                        triggertime = times[s+m]
-                        print(f"Triggered @ {times[s+m]}s")
-                    timeout.append(times[s+m]-triggertime)
-                    
-                    Tint, Cint = convertFrameToInt(frame)
-                    cT, cC, cS, cz = convertIntsToFloats(Tint, Cint, timeout[-1])
-
-                    T.append(cT)
-                    C.append(cC)
-                    S.append(cS)
-                    z.append(cz)
-                    
-                break #stop checking subsequent matches
+        #pulling current segment
+        frame = bitstream[s:s+32]
+        
+        #verifying that frame meets requirements, otherwise increasing start bit and rechecking
+        if frame[0:3] != [1, 0, 0] or not checkECC(frame, masks):
+            trash.append(frame[0])
+            s += 1
+            continue
+        
+        #once a good frame has been identified, print all trash frames
+        if trash:
+            print_frame("               Trash", trash, s, times[s], p7500[s], None)
+            frames.append((0, s, trash))
+            trash = []
             
-        #jump to next frame if valid one was identified, otherwise skip forward 16 bits and check again
-        if foundMatch:
-            s += m + 32
-        else:
-            s += 16
-
-    return T, C, S, z, timeout
-
-def parse_bitstream_to_profile(bitstream, times, p7500, debugdir='', ecc=True):
-    """ Parse a bitstream to a profile of temperature and conductivity
-
-    """
-    triggertime, frames = decode_bitstream_to_frames(bitstream, times, p7500, debugdir, ecc=ecc)
-    ret = parse_frames_to_profile(frames, times, triggertime)
-    # TODO: return frames
-    return ret
-
-
-def parse_frames_to_profile(frames, times, triggertime):
-    """
-    [GN] Proposal:
-    change this routine to return only 3 parallel lists:
-    list_time - time relative to trigger in seconds
-    list_temp - decoded temperature as deg C
-    list_cond - decoded conductivity as mS/cm
-
-    Salinity can be calculated externally from return values
-    and depth also calculated externally from time
-    """
-
-    # Initialize arrays
-    T = [] # temperature
-    C = [] # conductivity
-    S = [] # salinity
-    z = [] # depth
-    time1 = [] # time
-
-    # Parse frames into science data
-    for type, s, frame in frames:
-        if type == 0:
-            continue
-        t = times[s]
-
-        # For now, don't do frames before the trigger time
-        if t < triggertime:
-            continue
-
-        time1.append(t - triggertime)
-        cT, cC, cS, cz = convertFrame(frame, time1[-1])
-        T.append(cT)
-        C.append(cC)
-        S.append(cS)
-        z.append(cz)
-    return T, C, S, z, time1
-
-def get_pulse_and_trigger(bitstream, minlength, times, p7500, p7500thresh):
-    #identifying end of final long pulse
-    # could use regexp
-    triggertime = None
-    last_pulse_ind = 0
-    pulse_length = 0
-    for i, b in enumerate(bitstream):
-        if b == '1':
-            pulse_length += 1
-        else: # assert b == '0'
-            pulse_length = 0
-
-        if pulse_length >= minlength:
-            last_pulse_ind = i
-
-        # Check pilot tone
-        if triggertime is None and p7500[i] >= p7500thresh:
-            triggertime = times[i]
+        # Check pilot tone (after ECC checks so profile triggering requires (1) sufficient P7500 and (2) a valid frame)
+        if triggertime is None and p7500[s] >= p7500thresh:
+            triggertime = times[s]
             logging.info(f"Triggered @ {triggertime:0.6f} sec")
-
-    return triggertime, last_pulse_ind
-
-def decode_bitstream_to_frames(bitstream, times, p7500, debugdir, ecc=True):
-    """ Decode a bitstream to a series of frames.
-
-    If debugdir is provided, a text debugging files are saved to this directory
-
-    returns (triggertime, frames)
-    triggertime is the detected time of the trigger
-    frames a list of of tuples, where the first element is the type
-    frames[i][0]: 1 = a frame, 0 = bits not used in decoding (trash)
-    frames[i][1]: The start time of this frame
-    frames[i][2]: The bits of this frame or of unused bits, as a string of bits
-
-    """
-
-    frames = [] # tuple of type, index, frame
-    
-    p7500thresh = 0.7 #threshold for valid data from power at 7500 Hz
-    
-    triggertime, last_pulse_ind = get_pulse_and_trigger(bitstream, 100, times, p7500, p7500thresh)
-
-
-    #starts on final 1 bit (starting first '100' frame header)
-    s = last_pulse_ind
-    logging.debug("Pulse starts at s={:d} t={:0.6f}".format(s, times[s]))
-
-    eccv = ErrorCorrection()
-    if ecc:
-        logging.info("Verifying ECC checksums")
-    else:
-        logging.info("Not verifying ECC checksums")
-
-    #initializing fields for loop
-    numbits = len(bitstream)
-    # Index of the next unconsumed bit, for "trash" tracking
-    nextbit_ind = s
-
-    fdebug = None
-    if debugdir:
-        outfile = os.path.join(debugdir, 'bitframes.txt')
-        fdebug = open(outfile, 'wt')
-        logging.info("Writing " + outfile)
-
-    #looping through bits until finished parsing
-    while s + 32 < numbits:
-        # TODO: we should really error correct these bits too
-        if bitstream[s:s+3] != '100':
-            s += 1
-            continue
-
-        frame_b = bitstring_to_int(bitstream[s:s+32])
-        frame_parity = eccv.parity_b(frame_b)
-        frame_ecc = eccv.check_b(frame_b)
-
-        if ecc and not frame_parity:  # if frame ecc is incorrect and requested, skip to next bit
-            s += 1
-            continue
-
-        if nextbit_ind < s:
-            msg = format_frame('Trash', bitstream[nextbit_ind:s], nextbit_ind, times[nextbit_ind], False, False, triggertime)
-            #logging.debug(msg)
-            if fdebug:
-                fdebug.write(msg + "\n")
-            frames.append((0, nextbit_ind, bitstream[nextbit_ind:s]))
-            #nextbit_ind = s
-
-        msg = format_frame('Frame', bitstream[s:s+32], s, times[s], frame_parity, frame_ecc, triggertime)
-        #logging.debug(msg)
-        if fdebug:
-            fdebug.write(msg + "\n")
-
-        frames.append((1, s, bitstream[s:s+32]))
+        
+        if triggertime is None: #profile hasn't been triggered
+            frames.append((1, s, frame))
+            print_frame(" Frame (Pre-trigger)", frame, s, times[s], p7500[s], None)
+            
+        else: #profile has been triggered
+            
+            #current profile time
+            ctime = times[s] - triggertime
+            
+            #converting frame to T/C/S/z
+            Tint, Cint = convertFrameToInt(frame)
+            cT, cC, cS, cz = convertIntsToFloats(Tint, Cint, ctime)
+            
+            #storing frame/time
+            frames.append((2, s, frame))
+            profframes.append(frame)
+            proftime.append(ctime)
+            
+            #storing values for profile
+            T.append(cT)
+            C.append(cC)
+            S.append(cS)
+            z.append(cz)
+            
+            #printing frame with profile info
+            print_frame("Frame (Post-trigger)", frame, s, times[s], p7500[s], [cz,cT,cC,cS])
+            
+        #increase start bit by 32 to search for next frame
         s += 32
-        nextbit_ind = s
-
-    if nextbit_ind < s:
-        msg = format_frame('Trash', bitstream[nextbit_ind:s], nextbit_ind, times[nextbit_ind], False, False, triggertime)
-        #logging.debug(msg)
-        if fdebug:
-            fdebug.write(msg + "\n")
-        frames.append((0, nextbit_ind, bitstream[nextbit_ind:s]))
-        nextbit_ind = s
-
 
     # End parse bitstream
-    if fdebug:
-        fdebug.close()
-
-
-    return triggertime, frames
+    return T, C, S, z, proftime, profframes, frames
 
 
 
-def format_frame(label, cseg, s, t, frame_parity, frame_ecc, triggertime):
-    """ Output type, frame time, index, length, parity ok, ecc ok, frame contents """
-    #sseg = "".join( ['1' if b else '0' for b in cseg])
-    t2 = t - triggertime
-    if label == 'Frame':
-        token_parity = 'PAR_OK ' if frame_parity else 'PAR_BAD'
-        token_ecc    = 'ECC_OK ' if frame_parity else 'ECC_BAD'
-        x1, x2 = int(cseg, 2), int(cseg[::-1], 2)
-        token_hex    = "{:08X} {:08X}".format(x1, x2)
+def print_frame(label, frame, s, t, p7500, data):
+    framestring = "".join( ['1' if b else '0' for b in frame])
+    if data is None:
+        msg = f"{label} s={s:7d}, t={t:12.6f} p={p7500:5.2f} {framestring:s}"
     else:
-        token_parity = '-      '
-        token_ecc    = '-      '
-        token_hex = '-------- --------'
-        # cut last frame into 32-bit words
-        delim = "\n" + ' ' * len("Trash t=    0.010625, t'=      -1.289, s=      0, len= 40,-      ,-      ,-------- --------,")
-        s2 = delim.join(cseg[i:i+32] for i in range(0, len(cseg), 32))
-        cseg = s2
+        msg = f"{label} s={s:7d}, t={t:12.6f} p={p7500:5.2f} {framestring:s} z={data[0]:07.2f}, T={data[1]:05.2f}, C={data[2]:05.2f}, S={data[3]:05.2f}"
         
-
-    return "{:s} t={:12.6f}, t'={:12.3f}, s={:7d}, len={:3},{:s},{:s},{:s},{:s}" \
-           "".format(label, t, t2, s, len(cseg), token_parity, token_ecc, token_hex, cseg)
+    logging.debug(msg)
 
 
 
@@ -439,6 +264,7 @@ def test_ecc():
 ###################################################################################
 
 def unpack_frame_b(frame_b):
+    """ Unpack frame from a binary value  """
     #t_int = bitstring_to_int(frame[16:26])
     #t_int = (frame_b >> 16) & 0x3ff
     # after some reverse engineering
@@ -454,48 +280,32 @@ def unpack_frame_b(frame_b):
 
     return t_int, c_int
 
-def convert_frame(time, t_int, c_int):
-    
-    #depth from time
-    z = 0.72 + 2.76124*time - 0.000238007*time**2
-    
-    T = 0.0107164443 * t_int - 5.5387245882
-    C = 0.0153199220 * c_int - 0.0622192776
 
 
-    #salinity from temperature/conductivity/depth
-    if USE_GSW:
-        S = gsw.SP_from_C(C,T,z) #assumes pressure (mbar) approx. equals depth (m)
-    else:
-        S = float('nan')
-    logging.debug(f"{time:0.3f} {t_int} {T} ; {c_int} {C}")
-    
-    return T, C, S, z
-
-    
-
-def convertFrameToInt(frame, time):
-
+def convertFrameToInt(frame):
+    """ Convert a frame to integer fields
+    frame is a list of bits """
     Tint = binListToInt(frame[14:26])
     Cint = binListToInt(frame[3:14])
-
+    
     return Tint, Cint
-
-
+    
+    
 def convertIntsToFloats(Tint, Cint, time):
+    """ Convert a list of integer data fields to observations (floats) """
     #depth from time
     z = 0.72 + 2.76124*time - 0.000238007*time**2
-
+    
+    #temperature/conductivity from frame
     T = 0.0107164443 * Tint - 5.5387245882
-    C = 0.0153199220 * Tint - 0.0622192776
-
+    C = 0.0153199220 * Cint - 0.0622192776
+    
     #salinity from temperature/conductivity/depth
     if USE_GSW:
         S = gsw.SP_from_C(C,T,z) #assumes pressure (mbar) approx. equals depth (m)
     else:
         S = float('nan')
-    logging.debug(f"{time:0.3f} {t_int} {T} ; {c_int} {C}")
-
+    
     return T, C, S, z
 
 
