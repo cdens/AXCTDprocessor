@@ -48,93 +48,66 @@ def processAXCTD(inputfile, outputdir, timerange=[0,-1], p7500thresh=10, plot=Fa
     bitfile = outputdir + '_bitstream.txt'
     outputfile = outputdir + '_profile.txt'
 
-    outputfile = os.path.join(outputdir, 'output.txt')
-    demodfile = os.path.join(outputdir, 'demodbitstream.txt')
-    bitfile = os.path.join(outputdir, 'bitstream.txt')
-
-    if fromAudio:
-        #reading WAV file
-        print("[+] Reading audio file")
-        fs, snd = wavfile.read(inputfile)
-        
-        sndshape = np.shape(snd) #array size (tuple)
-        ndims = len(sndshape) #number of dimensions
-        if ndims == 1: #if one channel, use that
-            audiostream = snd
-        elif ndims == 2: #if two channels
-            audiostream = snd[:, 0] #use channel 1
-        else:
-            print("[!] Error- unexpected number of dimensions in audio file- terminating!")
-            exit()
-        
-        logging.info(f"Demodulating audio stream (size {np.shape(audiostream)})")
-        #demodulating PCM data
-        times, bitstream, signallevel, p7500, figures = \
-              demodulateAXCTD.demodulate_axctd(audiostream, fs, plot=plot)
-
-
-        #inverting bitstream
-        invertBitStream = False
-        if invertBitStream:
-            bsnew = []
-            for b in bitstream:
-                if b == 0:
-                    bsnew.append(1)
-                else:
-                    bsnew.append(0)
-            bitstream = bsnew
-
-
-        #writing test output data to file
-        with open(demodfile, 'wt') as f:
-            for t, b, sig, prof in zip(times, bitstream, signallevel, p7500):
-                f.write(f"{b},{t:0.6f},{prof:0.3f},{sig:0.3f}\n")
-
-        #writing bitstream to file (50 columns long)
-        with open(bitfile, 'w') as f:
-            lb = len(bitstream)
-            i = 0
-            il = 0
-            bpline = 50
-            while i < lb:
-                f.write(f"{bitstream[i]}")
-                i +=  1
-                il += 1
-                if il >= bpline:
-                    f.write("\n")
-                    il = 0
-
-        for ii, fig in enumerate(figures):
-            filename = os.path.join(outputdir, f"{ii+1}_demod.png")
-            fig.savefig(filename)
-            logging.info("Saving " + filename)
-
-
+    #reading WAV file
+    logging.info("[+] Reading audio file")
+    fs, snd = wavfile.read(inputfile)
+    
+    #if multiple channels, sum them together
+    sndshape = np.shape(snd) #array size (tuple)
+    ndims = len(sndshape) #number of dimensions
+    if ndims == 1: #if one channel, use that
+        logging.debug("Audio file has one channel")
+        audiostream = snd
+    elif ndims == 2: #if two channels
+        logging.debug("Audio file has multiple channels, processing data from first channel")
+        #audiostream = np.sum(snd,axis=1) #sum them up
+        audiostream = snd[:,0] #use first channel
     else:
-        bitstream = []
-        times = []
-        p7500 = []
-        with open(demodbitstream, 'rt') as f:
-            for line in f:
-                line = line.strip().split(',')
-                bitstream.append(int(line[0]))
-                times.append(float(line[1]))
-                p7500.append(float(line[2]))
-        times = np.asarray(times)
-        p7500 = np.asarray(p7500)
+        logging.info("[!] Error- unexpected number of dimensions in audio file- terminating!")
+        exit()
+    
+    logging.info(f"Demodulating audio stream (size {np.shape(audiostream)})")
+    
+    #demodulating PCM data
+    times, bitstream, signallevel, p7500, figures = \
+          demodulateAXCTD.demodulate_axctd(audiostream, fs, timerange, plot=plot)
+          
+    #writing test output data to file
+    with open(demodfile, 'wt') as f:
+        for t, b, sig, prof in zip(times, bitstream, signallevel, p7500):
+            f.write(f"{b},{t:0.6f},{prof:0.3f},{sig:0.3f}\n")
+            
+    #writing bitstream to file (50 columns long)
+    with open(bitfile, 'w') as f:
+        lb = len(bitstream)
+        i = 0
+        il = 0
+        bpline = 50
+        while i < lb:
+            f.write(f"{bitstream[i]}")
+            i +=  1
+            il += 1
+            if il >= bpline:
+                f.write("\n")
+                il = 0
+    
+    #saving all figures
+    for ii, fig in enumerate(figures):
+        filename = os.path.join(outputdir, f"{ii+1}_demod.png")
+        fig.savefig(filename)
+        logging.info("Saving " + filename)
+
     
     #parsing bitstream to CTD profile
-    print("[+] Parsing AXCTD bitstream into frames")
-    T, C, S, z, timeout = parseAXCTDframes.parse_bitstream_to_profile( \
-            bitstream, times, p7500, outputdir, ecc=ecc)
-
-
+    logging.info("[+] Parsing AXCTD bitstream into frames")
+    T, C, S, z, proftime, profframes, frames = parseAXCTDframes.parse_bitstream_to_profile(bitstream, times, p7500, p7500thresh)
+    
     #writing CTD data to ASCII file
-    print("[+] Writing AXCTD data to " + outputfile)
+    logging.info("[+] Writing AXCTD data to " + outputfile)
     with open(outputfile, "wt") as f:
-        f.write("Time (sec)\tDepth (m)\tTemperature (C)\tConductivity (mS/cm)\tSalinity (PSU)\n")
-        for (ct, cc, cs, cz, tt) in zip(T, C, S, z, timeout):
-            f.write(f"{tt:4.3f}\t\t{cz:6.1f}\t\t{ct:6.2f}\t\t{cc:6.2f}\t\t{cs:6.2f}\n")
+        f.write("Depth (m)   Temperature (C)   Conductivity (mS/cm)   Salinity (PSU)\n")
+        for (ct, cc, cs, cz) in zip(T, C, S, z):
+            f.write(f"{cz:9.2f}{ct: 15.2f}{cc: 20.2f}{cs: 17.2f}\n")
 
     if plot:
         fig1, axs1 = plt.subplots(1, 3, sharey=True)
