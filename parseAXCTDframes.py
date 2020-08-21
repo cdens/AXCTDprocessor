@@ -195,6 +195,8 @@ class ErrorCorrection:
     def correct(self, frame):
         """ Correct a frame """
         pass
+# End ErrorCorrection class
+
 
 # see also: https://wiki.python.org/moin/BitManipulation
 
@@ -220,7 +222,6 @@ def bitparity(w):
     return w & 1;
 
 
-
 #  GENERATING ECC MASKS FOR FRAME PARSING  
 
 def get_masks():
@@ -231,6 +232,7 @@ def get_masks():
             [2233171,2234195,2235219,2236243,6426707,6427731,6428755,6429779], #bit 30
             [86494,87518,88542,89566,4281054,4282078,4283102,4284126]] #bit 31
     return mask_ints
+
 def generateMasks():
     maskLen = 23 #each mask is 23 bits long
     
@@ -258,6 +260,23 @@ def test_ecc():
         assert ecc.check(y) == ecc.check_b(x)
 
 
+#  RUN ECC CHECK ON FRAME WITH MASKS CREATED IN GENERATEMASKS()
+def checkECC(frame, masks):
+
+    if sum(frame)%2 != 0: #if parity isn't even
+        return False
+        
+    data = np.asarray(frame[3:26]) #data ECC applies to
+    ecc = frame[26:31] #ECC bits
+    
+    for (bitMasks, bit) in zip(masks, ecc): #checking masks for each ECC bit
+        for mask in bitMasks: #loops through all 8 masks for each bit
+            if (sum(data*mask) + bit)%2 != 0:
+                return False # isValid = False
+    
+    return True #isValid
+
+
 
 ###################################################################################
 #          FRAME CONVERSION TO TEMPERATURE/CONDUCTIVITY/SALINITY/DEPTH            #
@@ -272,14 +291,6 @@ def unpack_frame_b(frame_b):
     #t_int = (frame_b >> (32-6)) & 0x1ff # frame 6:15]
     #logging.debug("frame={0:08x} {0:032b} {0:5d}".format(frame_b))
     #logging.debug("t_int={0:03x} {0:09b} {0:5d}".format(t_int))
-    
-    #c_int = bitstring_to_int(frame[ 5:14])
-    c_int = (frame_b >> 18) & 0x7ff # frame[28:18] (bit notation)
-    logging.debug("frame={0:08x} {0:032b} {0:5d}".format(frame_b))
-    logging.debug("c_int={0:03x} {0:09b} {0:5d}".format(c_int))
-
-    return t_int, c_int
-
 
 
 def convertFrameToInt(frame):

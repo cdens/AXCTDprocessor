@@ -1,7 +1,18 @@
-This software was developed to enable reprocessing AXCTD audio (WAV) files via command line. It is currently still under development.
+AXCTDprocessor enables users to reprocess AXCTD audio (WAV) files via command line. 
+Authors: Casey Densmore and Gregory Ng
 
-TODO:
-1. Identify FSK demodulation bit errors and improve system
-2. Improve bitstream frame parsing algorithm
-3. Add command line argument capabilities (e.g. python3 AXCTDprocessor -i inputfile.wav -o outputfile.txt)
+Usage:
+python3 processAXCTD -i inputfile.WAV
+
+Additional flags:
+   -o	   Output Filename Header: directory and header for output debug and profile files
+   -s	   Start time of AXCTD profile in WAV file, format: SS, MM:SS, or HH:MM:SS (default: 0 sec)
+   -e      End time of AXCTD profile in WAV file, format: SS, MM:SS, or HH:MM:SS (default: end of WAV file)
+   -p      Threshold for power at 7500 Hz used to distinguish profile tone (default: 20)
+   -v      Enable verbose output for debugging
+   --plot  Generate and display plots of demodulated data and generated AXCTD profile before terminating script
+
+Installation and Setup:
+This script requires python modules other than python base. Install them with `pip install -r requirements.txt`
+
 
