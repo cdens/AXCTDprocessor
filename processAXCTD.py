@@ -33,106 +33,50 @@ import os
 
 import matplotlib.pyplot as plt
 import numpy as np
-from scipy.io import wavfile #for wav file reading
 
 import demodulateAXCTD, parseAXCTDframes
+
+
 
 
 ###################################################################################
 #                               AXCTD PROCESSING DRIVER                           #
 ###################################################################################
 
-def processAXCTD(inputfile, outputdir, timerange=[0,-1], p7500thresh=10, plot=False):
+def processAXCTD(inputfile, outputdir, timerange=[0,-1], p7500thresh=10):
     
-    demodfile = outputdir + '_demod.txt'
-    bitfile = outputdir + '_bitstream.txt'
-    outputfile = outputdir + '_profile.txt'
-
-    #reading WAV file
-    logging.info("[+] Reading audio file")
-    fs, snd = wavfile.read(inputfile)
-    
-    #if multiple channels, sum them together
-    sndshape = np.shape(snd) #array size (tuple)
-    ndims = len(sndshape) #number of dimensions
-    if ndims == 1: #if one channel, use that
-        logging.debug("Audio file has one channel")
-        audiostream = snd
-    elif ndims == 2: #if two channels
-        logging.debug("Audio file has multiple channels, processing data from first channel")
-        #audiostream = np.sum(snd,axis=1) #sum them up
-        audiostream = snd[:,0] #use first channel
-    else:
-        logging.info("[!] Error- unexpected number of dimensions in audio file- terminating!")
-        exit()
-    
-    logging.info(f"Demodulating audio stream (size {np.shape(audiostream)})")
+    #reading in audio file
+    audiostream, fs = demodulateAXCTD.readAXCTDwavfile(inputfile)
     
     #demodulating PCM data
-    times, bitstream, signallevel, p7500, figures = \
-          demodulateAXCTD.demodulate_axctd(audiostream, fs, timerange, plot=plot)
+    times, bitstream, signallevel, p7500 = \
+          demodulateAXCTD.demodulate_axctd(audiostream, fs, timerange)
           
     #writing test output data to file
-    with open(demodfile, 'wt') as f:
+    with open(outputdir + '_demod.txt', 'wt') as f:
         for t, b, sig, prof in zip(times, bitstream, signallevel, p7500):
             f.write(f"{b},{t:0.6f},{prof:0.3f},{sig:0.3f}\n")
-            
-    #writing bitstream to file (50 columns long)
-    with open(bitfile, 'w') as f:
-        lb = len(bitstream)
-        i = 0
-        il = 0
-        bpline = 50
-        while i < lb:
-            f.write(f"{bitstream[i]}")
-            i +=  1
-            il += 1
-            if il >= bpline:
-                f.write("\n")
-                il = 0
-    
-    #saving all figures
-    for ii, fig in enumerate(figures):
-        filename = os.path.join(outputdir, f"{ii+1}_demod.png")
-        fig.savefig(filename)
-        logging.info("Saving " + filename)
-
     
     #parsing bitstream to CTD profile
     logging.info("[+] Parsing AXCTD bitstream into frames")
     T, C, S, z, proftime, profframes, frames = parseAXCTDframes.parse_bitstream_to_profile(bitstream, times, p7500, p7500thresh)
     
     #writing CTD data to ASCII file
+    outputfile = outputdir + '_profile.txt'
     logging.info("[+] Writing AXCTD data to " + outputfile)
     with open(outputfile, "wt") as f:
         f.write("Depth (m)   Temperature (C)   Conductivity (mS/cm)   Salinity (PSU)\n")
         for (ct, cc, cs, cz) in zip(T, C, S, z):
             f.write(f"{cz:9.2f}{ct: 15.2f}{cc: 20.2f}{cs: 17.2f}\n")
-
-    if plot:
-        fig1, axs1 = plt.subplots(1, 3, sharey=True)
-        axs1[0].plot(T, z, label='Temp (C)')
-        axs1[1].plot(C, z, label='Cond (mS/cm)')
-        axs1[2].plot(S, z, label='Sal (PSU)')
-        axs1[0].set_ylabel('Depth (m)')
-        axs1[0].set_xlabel('Temperature (C)')
-        axs1[1].set_xlabel('Conductivity (mS/cm)')
-        axs1[2].set_xlabel('Salinity (PSU)')
-        for ax in axs1:
-            ax.set_ylim(ax.get_ylim()[::-1])
-            ax.grid(True)
-        plt.tight_layout()
-
-        logging.info("Saving " + filename)
-        fig1.savefig(os.path.join(outputdir, "ctd.png"))
-
-    if plot:
-        logging.info("Displaying plots (close to terminate program)")
-        plt.show()
         
     return 0
 
 
+    
+    
+    
+    
+    
 ###################################################################################
 #                           ARGUMENT PARSING + MAIN                               #
 ###################################################################################
@@ -145,8 +89,8 @@ def main():
     parser.add_argument('-o', '--output', default='testfiles/test', help='Output file prefix')
     parser.add_argument('-s', '--starttime', default='0', help='AXCTD start time in WAV file') #13:43
     parser.add_argument('-e', '--endtime',  default='-1', help='AXCTD end time in WAV file') #20:00
+    parser.add_argument('-d', '--profdetect', action='store_true', help='Determine range of file to process by 7500 Hz profile tone')
     parser.add_argument('-p', '--p7500thresh',  default='10', help='Threshold for profile tone') #20
-    parser.add_argument('--plot', action="store_true", help='Show plots')
     parser.add_argument('-v', '--verbose', action='store_true', help='Enable verbose output')
     args = parser.parse_args()
     
@@ -201,7 +145,7 @@ def main():
     except ValueError:
         logging.info("[!] Unable to interpret specified end time- defaulting to end of file")
 
-    return processAXCTD(args.input, args.output, timerange, p7500thresh, plot=args.plot)
+    return processAXCTD(args.input, args.output, timerange, p7500thresh)
 
 
 #MAIN
