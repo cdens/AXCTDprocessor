@@ -54,11 +54,7 @@ def processAXCTD(inputfile, outputdir, timerange=[0,-1], settings = ["autodetect
         pcm, tstart = demodulateAXCTD.trim_file_to_prof(pcm, tstart, fs, t400) #trimming PCM data to transmission only
         
     #demodulating PCM data
-    new = True
-    if new:
-        times, bitstream, signallevel = demodulateAXCTD.demodulate_axctd(pcm, tstart, fs)
-    else:
-        times, bitstream, signallevel = demodulateAXCTD.demodulate_axctd_old(pcm, tstart, fs)
+    times, bitstream, signallevel = demodulateAXCTD.demodulate_axctd(pcm, tstart, fs)
     
     #writing test output data to file
     with open(outputdir + '_demod.txt', 'wt') as f:
