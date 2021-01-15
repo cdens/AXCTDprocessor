@@ -46,7 +46,7 @@ except ImportError:
 ###################################################################################
 
 
-def parse_bitstream_to_profile(bitstream, times, p7500, p7500thresh):
+def parse_bitstream_to_profile(bitstream, times, t7500):
     
     proftime = []
     T = []
@@ -83,23 +83,19 @@ def parse_bitstream_to_profile(bitstream, times, p7500, p7500thresh):
         
         #once a good frame has been identified, print all trash frames
         if trash:
-            print_frame("               Trash", trash, s, times[s], p7500[s], None)
+            print_frame("               Trash", trash, s, times[s], None)
             frames.append((0, s, trash))
             trash = []
             
         # Check pilot tone (after ECC checks so profile triggering requires (1) sufficient P7500 and (2) a valid frame)
-        if triggertime is None and p7500[s] >= p7500thresh:
-            triggertime = times[s]
-            logging.info(f"Triggered @ {triggertime:0.6f} sec")
-        
-        if triggertime is None: #profile hasn't been triggered
+        if times[s] <= t7500:
             frames.append((1, s, frame))
-            print_frame(" Frame (Pre-trigger)", frame, s, times[s], p7500[s], None)
+            print_frame(" Frame (Pre-trigger)", frame, s, times[s], None)
             
         else: #profile has been triggered
             
             #current profile time
-            ctime = times[s] - triggertime
+            ctime = times[s] - t7500
             
             #converting frame to T/C/S/z
             Tint, Cint = convertFrameToInt(frame)
@@ -117,7 +113,7 @@ def parse_bitstream_to_profile(bitstream, times, p7500, p7500thresh):
             z.append(cz)
             
             #printing frame with profile info
-            print_frame("Frame (Post-trigger)", frame, s, times[s], p7500[s], [cz,cT,cC,cS])
+            print_frame("Frame (Post-trigger)", frame, s, times[s], [cz,cT,cC,cS])
             
         #increase start bit by 32 to search for next frame
         s += 32
@@ -127,12 +123,12 @@ def parse_bitstream_to_profile(bitstream, times, p7500, p7500thresh):
 
 
 
-def print_frame(label, frame, s, t, p7500, data):
+def print_frame(label, frame, s, t, data):
     framestring = "".join( ['1' if b else '0' for b in frame])
     if data is None:
-        msg = f"{label} s={s:7d}, t={t:12.6f} p={p7500:5.2f} {framestring:s}"
+        msg = f"{label} s={s:7d}, t={t:12.6f} {framestring:s}"
     else:
-        msg = f"{label} s={s:7d}, t={t:12.6f} p={p7500:5.2f} {framestring:s} z={data[0]:07.2f}, T={data[1]:05.2f}, C={data[2]:05.2f}, S={data[3]:05.2f}"
+        msg = f"{label} s={s:7d}, t={t:12.6f} {framestring:s} z={data[0]:07.2f}, T={data[1]:05.2f}, C={data[2]:05.2f}, S={data[3]:05.2f}"
         
     logging.debug(msg)
 
@@ -170,6 +166,17 @@ def checkECC(frame, masks):
 
     if sum(frame)%2 != 0: #if parity isn't even
         return False
+        
+    #data = binListToInt(frame[:27])
+    #ecc = binListToInt(frame[27:])
+    #
+    #if ecc != 0:
+    #    if data/ecc == 101:
+    #        return True
+    #    else:
+    #        return False
+    
+    
         
     data = np.asarray(frame[3:26]) #data ECC applies to
     ecc = frame[26:31] #ECC bits

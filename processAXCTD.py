@@ -31,9 +31,7 @@ import logging
 import sys
 import os
 
-import matplotlib.pyplot as plt
 import numpy as np
-
 import demodulateAXCTD, parseAXCTDframes
 
 
@@ -43,23 +41,33 @@ import demodulateAXCTD, parseAXCTDframes
 #                               AXCTD PROCESSING DRIVER                           #
 ###################################################################################
 
-def processAXCTD(inputfile, outputdir, timerange=[0,-1], p7500thresh=10):
+def processAXCTD(inputfile, outputdir, timerange=[0,-1], settings = ["autodetect",[30,36]]):
     
     #reading in audio file
-    audiostream, fs = demodulateAXCTD.readAXCTDwavfile(inputfile)
+    pcm, tstart, fs = demodulateAXCTD.readAXCTDwavfile(inputfile, timerange)
     
+    #identifying profile tone start from file
+    if settings[0] == "manual":
+        t7500 = settings[1]
+    else:
+        t400, t7500 = demodulateAXCTD.identify_prof_start(pcm, tstart, fs, settings)
+        pcm, tstart = demodulateAXCTD.trim_file_to_prof(pcm, tstart, fs, t400) #trimming PCM data to transmission only
+        
     #demodulating PCM data
-    times, bitstream, signallevel, p7500 = \
-          demodulateAXCTD.demodulate_axctd(audiostream, fs, timerange)
-          
+    new = True
+    if new:
+        times, bitstream, signallevel = demodulateAXCTD.demodulate_axctd(pcm, tstart, fs)
+    else:
+        times, bitstream, signallevel = demodulateAXCTD.demodulate_axctd_old(pcm, tstart, fs)
+    
     #writing test output data to file
     with open(outputdir + '_demod.txt', 'wt') as f:
-        for t, b, sig, prof in zip(times, bitstream, signallevel, p7500):
-            f.write(f"{b},{t:0.6f},{prof:0.3f},{sig:0.3f}\n")
+        for t, b, sig in zip(times, bitstream, signallevel):
+            f.write(f"{b},{t:0.6f},{sig:0.3f}\n")
     
     #parsing bitstream to CTD profile
     logging.info("[+] Parsing AXCTD bitstream into frames")
-    T, C, S, z, proftime, profframes, frames = parseAXCTDframes.parse_bitstream_to_profile(bitstream, times, p7500, p7500thresh)
+    T, C, S, z, proftime, profframes, frames = parseAXCTDframes.parse_bitstream_to_profile(bitstream, times, t7500)
     
     #writing CTD data to ASCII file
     outputfile = outputdir + '_profile.txt'
@@ -84,69 +92,92 @@ def processAXCTD(inputfile, outputdir, timerange=[0,-1], p7500thresh=10):
 #function to handle input arguments
 
 def main():
+    
     parser = argparse.ArgumentParser(description='Demodulate an audio file to text')
-    parser.add_argument('-i', '--input', default='testfiles/sample_full.wav', help='Input WAV file')
-    parser.add_argument('-o', '--output', default='testfiles/test', help='Output file prefix')
+    parser.add_argument('-i', '--input', default='ERROR_NO_FILE_SPECIFIED', help='Input WAV file')
+    parser.add_argument('-o', '--output', default='output/prof', help='Output file prefix')
+    
     parser.add_argument('-s', '--starttime', default='0', help='AXCTD start time in WAV file') #13:43
     parser.add_argument('-e', '--endtime',  default='-1', help='AXCTD end time in WAV file') #20:00
-    parser.add_argument('-d', '--profdetect', action='store_true', help='Determine range of file to process by 7500 Hz profile tone')
-    parser.add_argument('-p', '--p7500thresh',  default='10', help='Threshold for profile tone') #20
+    
+    parser.add_argument('-m', '--mode', default='autodetect', help='Profile transmission detection mode (autodetect, timefrompulse, or manual)')
+    parser.add_argument('--autodetect-start',  default='30', help='Point at which autodetect algorithm starts scanning for profile transmission start')
+    parser.add_argument('--autodetect-end',  default='36', help='Point at which autodetect algorithm stops scanning for profile transmission start')
+    parser.add_argument('--signal-threshold',  default='0.5', help='Threshold for normalized signal levels in profile transmission autodetection')
+    
+    parser.add_argument('--header-duration',  default='33', help='Duration between first 400 Hz pulse and profile start')
+    parser.add_argument('-p', '--profile-start', default='33', help='Profile transmission detection mode (autodetect, timefrompulse, or manual)')
+    
     parser.add_argument('-v', '--verbose', action='store_true', help='Enable verbose output')
     args = parser.parse_args()
     
     #configuring logging level
     loglevel = logging.DEBUG if args.verbose else logging.INFO
     logging.basicConfig(level=loglevel, stream=sys.stdout)
-    
     np.set_printoptions(precision=4)
     
-    #threshold for valid data from power at 7500 Hz
-    try:
-        p7500thresh = float(args.p7500thresh)
-    except ValueError:
-        logging.info("[!] Warning- p7500 threshold must be a floating point number or integer, defaulting to 20")
-        p7500thresh = 20
+    #checking for input WAV file
+    if args.input == 'ERROR_NO_FILE_SPECIFIED':
+        logging.info("[!] Error- no input WAV file specified! Terminating")
+        exit()
+    elif not os.path.exists(args.input):
+        logging.info("[!] Specified input file does not exist! Terminating")
+        exit()
     
-    #reading range of WAV file to parse
-    timerange = [0,-1] #default
+    #generating output directory
+    outpath = args.output
+    outdir = os.path.dirname(outpath)
+    if not os.path.exists(outdir):
+        os.makedirs(outdir)
     
-    #start time
+    #WAV time bounds for processing
+    timerange = [parse_times(args.starttime), parse_times(args.endtime)]
+    if timerange[0] < 0:
+        timerange[0] == 0
+    if timerange[1] < 0:
+        timerange[1] = -1
+    
+    #settings for profile transmission detection
+    settings = [args.mode]
+    if args.mode == "autodetect":
+        settings.append([float(args.autodetect_start), float(args.autodetect_end)])
+    elif args.mode == "timefrompulse":
+        settings.append(float(header_duration))
+    elif args.mode == "manual":
+        settings.append(parse_times(args.profile_start))
+    else:
+        logging.info(f"[!] Specified profile transmission detector mode {settings[0]} is not a valid option. Please select 'autodetect', 'timefrompulse', 'manual'")
+    
+    #profile threshold
+    thresh = float(args.signal_threshold)
+    if thresh <= 0 or thresh > 1:
+        logging.info("[!] Specified signal threshold outside the range (0,1], defaulting to 0.5")
+        thresh = 0.5
+    settings.append(thresh)
+
+    return processAXCTD(args.input, outpath, timerange, settings)
+    
+
+    
+    
+def parse_times(time_string):
     try:
-        if ":" in args.starttime: #format is HH:MM:SS 
-            s = 0
-            for i,val in enumerate(reversed(args.starttime.split(":"))):
+        if ":" in time_string: #format is HH:MM:SS 
+            t = 0
+            for i,val in enumerate(reversed(time_string.split(":"))):
                 if i <= 2: #only works up to hours place
-                    s += int(val)*60**i
-                else:
-                    logging.info("[!] Warning- ignoring all start time information past the hours place (HH:MM:SS)")
-                    
-            timerange[0] = s
-            
-        else:
-            timerange[0] = int(args.starttime)
-            
-    except ValueError:
-        logging.info("[!] Unable to interpret specified start time- defaulting to 00:00")
-        
-    #end time
-    try:
-        if ":" in args.endtime: #format is HH:MM:SS 
-            e = 0
-            for i,val in enumerate(reversed(args.endtime.split(":"))):
-                if i <= 2: #only works up to hours place
-                    e += int(val)*60**i
+                    t += int(val)*60**i
                 else:
                     logging.info("[!] Warning- ignoring all end time information past the hours place (HH:MM:SS)")
-                    
-            timerange[1] = e
         else:
-            timerange[1] = int(args.endtime)
+            t = int(time_string)
+        return t
         
     except ValueError:
-        logging.info("[!] Unable to interpret specified end time- defaulting to end of file")
+        logging.info("[!] Unable to interpret specified start time- defaulting to 00:00")
+        return -2
 
-    return processAXCTD(args.input, args.output, timerange, p7500thresh)
-
+        
 
 #MAIN
 if __name__ == "__main__":
