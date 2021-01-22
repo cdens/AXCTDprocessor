@@ -164,8 +164,8 @@ def generateMasks():
 #  RUN ECC CHECK ON FRAME WITH MASKS CREATED IN GENERATEMASKS()
 def checkECC(frame, masks):
 
-    if sum(frame)%2 != 0: #if parity isn't even
-        return False
+    #if sum(frame)%2 != 0: #if parity isn't even
+    #    return False
         
     #data = binListToInt(frame[:27])
     #ecc = binListToInt(frame[27:])

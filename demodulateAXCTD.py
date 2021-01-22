@@ -214,9 +214,9 @@ def demodulate_axctd(pcm, tstart, fs):
     f1 = 400 # bit 1 (mark) = 400 Hz
     f2 = 800 # bit 0 (space) = 800 Hz
     bitrate = 800 #symbol rate = 800 Hz
-    phase_error = 30 #accountable phase error expressed as +/- X % of a single bit's period
+    phase_error = 25 #accountable phase error expressed as +/- X % of a single bit's period
     bit_inset = 2 #number of points after zero crossing where bit identification starts
-    high_bit_scale = 1.4 #scale factor for high frequency bit to correct for erroneous high power on low frequencies
+    high_bit_scale = 1.45 #scale factor for high frequency bit to correct for erroneous high power on low frequencies
     fprof = 7500 #7500 Hz signal associated with active profile data transmission
     
     # Basic signal accounting information
