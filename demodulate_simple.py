@@ -189,7 +189,7 @@ def trim_file_to_prof(pcm, tstart, fs, t400):
         tstart = t400
         pcm = pcm[newstartind:]
     
-        return pcm, tstart
+    return pcm, tstart
     
     
     

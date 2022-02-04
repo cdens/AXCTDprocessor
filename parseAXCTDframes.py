@@ -1,9 +1,8 @@
 #! /usr/bin/env python3
 
-#   Purpose: process data from AXCTD audio files
-#   Usage: via command line: -i flag specifies input audio (WAV) file and -o
-#           specifies output text file containing AXCTD profile
-#       e.g. "python3 processAXCTD -i inputaudiofile.wav -o outputASCIIfile.txt"
+#   Purpose: Process demodulated binary data from AXCTD audio (WAV) files into 32-bit
+#       frames, pull temperature/conductivity data from those frames and calculate the 
+#       corresponding depth and salinity for each observation
 #
 #   This file is a part of AXCTDprocessor
 #
@@ -132,20 +131,24 @@ def print_frame(label, frame, s, t, data):
         
     logging.debug(msg)
 
+    
+    
 
-#  GENERATING ECC MASKS FOR FRAME PARSING  
+###################################################################################
+#           ERROR CODE CORRECTION (VALIDATION ONLY, NO CORRECTIONS MADE)          #
+###################################################################################
 
 def get_masks():
-    #8 masks per ECC bit
-    mask_ints = [[3166839,3167863,3168887,3169911,7360887,7361911,7362935,7363959], #bit 27
-            [553292,554316,555340,556364,4747852,4748876,4749900,4750924], #bit 28
-            [274854,275878,276902,277926,4469414,4470438,4471462,4472486], #bit 29
-            [2233171,2234195,2235219,2236243,6426707,6427731,6428755,6429779], #bit 30
-            [86494,87518,88542,89566,4281054,4282078,4283102,4284126]] #bit 31
+    #16 masks per ECC bit
+    mask_ints = [[3166839, 3167863, 3168887, 3169911, 7360887, 7361911, 7362935, 7363959, 11555447, 11556471, 11557495, 11558519, 15749495, 15750519, 15751543, 15752567], #bit 27
+            [553292, 554316, 555340, 556364, 4747852, 4748876, 4749900, 4750924, 8941900, 8942924, 8943948, 8944972, 13136460, 13137484, 13138508, 13139532], #bit 28
+            [274854, 275878, 276902, 277926, 4469414, 4470438, 4471462, 4472486, 8663462, 8664486, 8665510, 8666534, 12858022, 12859046, 12860070, 12861094], #bit 29
+            [2233171, 2234195, 2235219, 2236243, 6426707, 6427731, 6428755, 6429779, 10621779, 10622803, 10623827, 10624851, 14815315, 14816339, 14817363, 14818387], #bit 30
+            [86494, 87518, 88542, 89566, 4281054, 4282078, 4283102, 4284126, 8475102, 8476126, 8477150, 8478174, 12669662, 12670686, 12671710, 12672734]] #bit 31
     return mask_ints
 
 def generateMasks():
-    maskLen = 23 #each mask is 23 bits long
+    maskLen = 24 #each mask is 23 bits long
     
     mask_ints = get_masks()
     masks = []
@@ -158,27 +161,16 @@ def generateMasks():
     
     return masks
         
-        
-    
 
 #  RUN ECC CHECK ON FRAME WITH MASKS CREATED IN GENERATEMASKS()
 def checkECC(frame, masks):
-
-    #if sum(frame)%2 != 0: #if parity isn't even
-    #    return False
-        
-    #data = binListToInt(frame[:27])
-    #ecc = binListToInt(frame[27:])
-    #
-    #if ecc != 0:
-    #    if data/ecc == 101:
-    #        return True
-    #    else:
-    #        return False
     
+    #dont waste time with the bit checks if parity or header don't match
+    if sum(frame)%2 != 0 or frame[:2] != [1,0]: 
+        return False
     
         
-    data = np.asarray(frame[3:26]) #data ECC applies to
+    data = np.asarray(frame[2:26]) #data ECC applies to
     ecc = frame[26:31] #ECC bits
     
     for (bitMasks, bit) in zip(masks, ecc): #checking masks for each ECC bit
@@ -189,6 +181,9 @@ def checkECC(frame, masks):
     return True #isValid
 
 
+    
+    
+    
 
 ###################################################################################
 #          FRAME CONVERSION TO TEMPERATURE/CONDUCTIVITY/SALINITY/DEPTH            #
@@ -223,6 +218,8 @@ def convertIntsToFloats(Tint, Cint, time):
 
 
 
+    
+    
 
 ###################################################################################
 #                         BINARY LIST / INTEGER CONVERSION                       #

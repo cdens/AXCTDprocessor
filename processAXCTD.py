@@ -32,7 +32,8 @@ import sys
 import os
 
 import numpy as np
-import demodulateAXCTD, parseAXCTDframes
+import matplotlib.pyplot as plt
+import demodulate_simple, demodulate_matchfilter, parseAXCTDframes
 
 
 
@@ -41,10 +42,18 @@ import demodulateAXCTD, parseAXCTDframes
 #                               AXCTD PROCESSING DRIVER                           #
 ###################################################################################
 
+#TODO:
+#   o verify data inputs/outputs work for greg's match filter demodulation
+#   o update user inputs + file outputs (add plotting options for profiles)
+#   o clean up logging scheme
+#   o clean code
+#   o test data against UTIG/NASA JPL AXCTD files
+
+
 def processAXCTD(inputfile, outputdir, timerange=[0,-1], settings = ["autodetect",[30,36]]):
     
     #reading in audio file
-    pcm, tstart, fs = demodulateAXCTD.readAXCTDwavfile(inputfile, timerange)
+    pcm, tstart, fs = demodulate_simple.readAXCTDwavfile(inputfile, timerange)
     
     #identifying profile tone start from file
     if settings[0] == "manual":
@@ -53,8 +62,11 @@ def processAXCTD(inputfile, outputdir, timerange=[0,-1], settings = ["autodetect
         t400, t7500 = demodulateAXCTD.identify_prof_start(pcm, tstart, fs, settings)
         pcm, tstart = demodulateAXCTD.trim_file_to_prof(pcm, tstart, fs, t400) #trimming PCM data to transmission only
         
-    #demodulating PCM data
-    times, bitstream, signallevel = demodulateAXCTD.demodulate_axctd(pcm, tstart, fs)
+    #demodulating PCM data: basic version with mark/space frequency power calculations
+    times, bitstream, signallevel = demodulate_simple.demodulate_axctd(pcm, tstart, fs)
+    
+    #demodulating with 
+    times, bitstream, data_db2, active_db2, figs = demodulate_axctd(pcm, fs, timerange, plot=False)
     
     #writing test output data to file
     with open(outputdir + '_demod.txt', 'wt') as f:
@@ -72,6 +84,33 @@ def processAXCTD(inputfile, outputdir, timerange=[0,-1], settings = ["autodetect
         f.write("Depth (m)   Temperature (C)   Conductivity (mS/cm)   Salinity (PSU)\n")
         for (ct, cc, cs, cz) in zip(T, C, S, z):
             f.write(f"{cz:9.2f}{ct: 15.2f}{cc: 20.2f}{cs: 17.2f}\n")
+            
+            
+    #plotting
+    tfig = plt.figure()
+    tfig.clear()
+    tax = tfig.add_axes([0.1,0.1,0.85,0.85])
+    sfig = plt.figure()
+    sfig.clear()
+    sax = sfig.add_axes([0.1,0.1,0.85,0.85])
+    tax.plot(T,z,'k',linewidth=2,label='Original',zorder=11)
+    sax.plot(S,z,'k',linewidth=2,label='Original',zorder=11)
+    tax.set_xlabel('Temperature ($^\circ$C)')
+    sax.set_xlabel('Salinity (PSU)')
+    for ax in [tax,sax]:
+        ax.set_ylabel('Depth (m)')
+        # ax.set_title('AXCTD Processor Error Rate Evaluation')
+        # ax.legend()
+        ax.grid()
+        ax.set_ylim([-5,1200])
+        ax.set_yticks([0,100,200,400,600,800,1000,1200])
+        ax.set_yticklabels([0,100,200,400,600,800,1000,1200])
+        ax.invert_yaxis()
+                 
+    tfig.savefig(outputdir + '_AXCTD_Temperature.png',format='png')
+    plt.close('tfig')
+    sfig.savefig(outputdir + '_AXCTD_Salinity.png',format='png')
+    plt.close('sfig')
         
     return 0
 
