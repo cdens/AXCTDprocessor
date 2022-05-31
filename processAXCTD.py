@@ -53,22 +53,16 @@ def main():
     parser.add_argument('-s', '--starttime', default='0', help='AXCTD start time in WAV file') #13:43
     parser.add_argument('-e', '--endtime',  default='-1', help='AXCTD end time in WAV file') #20:00
     
-    parser.add_argument('--autodetect-start',  default='30', help='Point at which autodetect algorithm starts scanning for profile transmission start')
-    parser.add_argument('--autodetect-end',  default='-1', help='Point at which autodetect algorithm stops scanning for profile transmission start')
+    parser.add_argument('-a','--autodetect-start',  default='30', help='Point at which autodetect algorithm starts scanning for profile transmission start')
+    parser.add_argument('-b','--autodetect-end',  default='-1', help='Point at which autodetect algorithm stops scanning for profile transmission start')
     
-    parser.add_argument('--sig-threshold-400',  default='2', help='Threshold for normalized 400 Hz signal level to detect profile transmission')
-    parser.add_argument('--sig-threshold-7500',  default='1.5', help='Threshold for normalized 7500 Hz signal level to detect profile transmission')
-    parser.add_argument('--dead-freq',  default='3000', help='"Dead" (quiet) frequency used to calculate normalized signal levels (Hz)')
-    parser.add_argument('--pointsperloop',  default='100000', help='Number of PCM audio data points processed per iteration')
+    parser.add_argument('-p','--sig-threshold-400',  default='2', help='Threshold for normalized 400 Hz signal level to detect profile transmission')
+    parser.add_argument('-t','--sig-threshold-7500',  default='1.5', help='Threshold for normalized 7500 Hz signal level to detect profile transmission')
+    parser.add_argument('-d','--dead-freq',  default='3000', help='"Dead" (quiet) frequency used to calculate normalized signal levels (Hz)')
+    parser.add_argument('-l','--pointsperloop',  default='100000', help='Number of PCM audio data points processed per iteration')
     
     
-    parser.add_argument('-v', '--verbose', action='store_true', help='Enable verbose output')
-    args = parser.parse_args()
-    
-    #configuring logging level
-    loglevel = logging.DEBUG if args.verbose else logging.INFO
-    logging.basicConfig(level=loglevel, stream=sys.stdout)
-    np.set_printoptions(precision=4)
+    args = parser.parse_args()    
     
     #checking for input WAV file
     if args.input == 'ERROR_NO_FILE_SPECIFIED':
