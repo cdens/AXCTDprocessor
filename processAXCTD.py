@@ -61,6 +61,9 @@ def main():
     parser.add_argument('-d','--dead-freq',  default='3000', help='"Dead" (quiet) frequency used to calculate normalized signal levels (Hz)')
     parser.add_argument('-l','--pointsperloop',  default='100000', help='Number of PCM audio data points processed per iteration')
     
+    parser.add_argument('-m','--mark-freq',  default='400', help='Mark (bit 1) frequency (Hz)')
+    parser.add_argument('-n','--space-freq',  default='800', help='Space (bit 0) frequency (Hz)')
+    parser.add_argument('-u','--use-bandpass',  action='store_true', help='Apply this flag to use a bandpass filter (100 Hz to 1200 Hz) rather than a 1200 Hz lowpass filter before demodulation')
     
     args = parser.parse_args()    
     
@@ -91,7 +94,9 @@ def main():
                 'minR400': float(args.sig_threshold_400),
                 'mindR7500': float(args.sig_threshold_7500),
                 'deadfreq': float(args.dead_freq),
-                'pointsperloop': int(args.pointsperloop)}
+                'pointsperloop': int(args.pointsperloop),
+                'mark_space_freqs' : [float(args.mark_freq), float(args.space_freq)],
+                'use_bandpass' : args.use_bandpass}
     
     return processAXCTD(args.input, args.output, timerange, settings)
     
@@ -125,6 +130,8 @@ def processAXCTD(wavfile,outfile,timerange,settings):
     deadfreq = settings['deadfreq']
     pointsperloop = settings['pointsperloop'] #about 2 sec of data
     triggerrange = settings['triggerrange']
+    mark_space_freqs = settings['mark_space_freqs']
+    use_bandpass = settings['use_bandpass']
         
     #running AXCTD Processor instance, timing
     print("Processing profile")
@@ -150,14 +157,14 @@ def processAXCTD(wavfile,outfile,timerange,settings):
         for desc,ckey in zip(['Probe Code', 'Maximum Depth (m)','Probe Serial'],['probe_code','max_depth','serial_no']):
             f.write(f"{desc}: {ap.metadata[ckey]}\n")
         f.write("Conversion equations:\n")
-        for coeff,desc in zip(['z','t','c'], ['Depth','Temperature','Conductivity']):
+        for coeff,desc,symb in zip(['z','t','c'], ['Depth','Temperature','Conductivity'],['t','T','C']):
             if sum(ap.metadata[coeff + 'coeff_valid']) == 4:
                 cfield = coeff + 'coeff'
                 defaultstatus = ''
             else:
                 cfield = coeff + 'coeff_default'
                 defaultstatus = '(default)'
-            cureqn = ' + '.join([f'{val}*{coeff}^{i}' for i,val in enumerate(ap.metadata[cfield])])
+            cureqn = ' + '.join([f'{val}*{symb}^{i}' for i,val in enumerate(ap.metadata[cfield])])
             f.write(f'{desc}: {cureqn} {defaultstatus}\n')
         
         #processor settings

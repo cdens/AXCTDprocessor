@@ -60,17 +60,21 @@ def boxsmooth_lag(data,window,startind):
 ###################################################################################
     
 
-def demodulate_axctd(pcm, fs, edge_buffer, high_bit_scale):
+def demodulate_axctd(pcm, fs, edge_buffer, sos, bitrate, f1, f2, trig1, trig2, Npcm, bit_inset, phase_error, high_bit_scale):
     
-    #basic configuration
-    f1 = 400 # bit 1 (mark) = 400 Hz
-    f2 = 800 # bit 0 (space) = 800 Hz
-    bitrate = 800 #symbol rate = 800 Hz
-    phase_error = 25 #accountable phase error expressed as +/- X % of a single bit's period
-    bit_inset = 1 #number of points after zero crossing where bit identification starts
+    #basic configuration- default options
+    # f1 = 400 # bit 1 (mark) = 400 Hz
+    # f2 = 800 # bit 0 (space) = 800 Hz
+    # bitrate = 800 #symbol rate = 800 Hz
+    # bit_inset = 1 #number of points after/before zero crossing where bit identification starts/ends
+    # phase_error = 25
+    # sos = signal.butter(6, 1200, btype='lowpass', fs=fs, output='sos') #low pass
+    # N = int(np.round(fs/bitrate*(1 - phase_error/100))) #first crossing following previous that could be a full bit
+    # Npcm = N - 2*bit_inset
+    # trig1 = 2*np.pi*np.arange(0,Nn)/fs*f1 #trig term for power calculation
+    # trig2 = 2*np.pi*np.arange(0,Nn)/fs*f2
     
-    # Use bandpass filter to extract digital data only
-    sos = signal.butter(6, 1200, btype='lowpass', fs=fs, output='sos') #low pass
+    # apply filter to extract FSK data in desired frequency range (<1200 Hz) only
     pcmlow = signal.sosfilt(sos, pcm)
     
     #finding all zero crossings
@@ -82,7 +86,6 @@ def demodulate_axctd(pcm, fs, edge_buffer, high_bit_scale):
     zerocrossings = np.delete(zerocrossings, np.where(zerocrossings < edge_buffer)) 
     
     #identify zero crossings to separate bits within phase error percentage 
-    N = int(np.round(fs/bitrate*(1 - phase_error/100))) #first crossing following previous that could be a full bit
     bit_edges = [zerocrossings[0]]
     prev = zerocrossings[0]
     
@@ -94,14 +97,11 @@ def demodulate_axctd(pcm, fs, edge_buffer, high_bit_scale):
         bit_edges.append(zerocrossings[c])
     
     #calculate power at FSK frequencies for each "bit"
-    Nn = N - 2*bit_inset
-    trig1 = 2*np.pi*np.arange(0,Nn)/fs*f1 #trig term for power calculation
-    trig2 = 2*np.pi*np.arange(0,Nn)/fs*f2
     s1 = [] #stores power levels 
     s2 = []
     
     for e in bit_edges[:-1]:
-        cdata = pcmlow[e+bit_inset:e+bit_inset+Nn]
+        cdata = pcmlow[e+bit_inset:e+bit_inset+Npcm]
         s1.append(np.abs(np.sum(cdata*np.cos(trig1) + 1j*cdata*np.sin(trig1))))
         s2.append(np.abs(np.sum(cdata*np.cos(trig2) + 1j*cdata*np.sin(trig2)))*high_bit_scale)
         

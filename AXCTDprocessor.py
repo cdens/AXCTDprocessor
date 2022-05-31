@@ -66,7 +66,7 @@ def readAXCTDwavfile(inputfile):
 class AXCTD_Processor:
 
     #initializing current thread (saving variables, reading audio data or contacting/configuring receiver)
-    def __init__(self, audiofile, minR400=2.0, mindR7500=1.5, deadfreq=3000, pointsperloop=88200, timerange=[0,-1], triggerrange=[30,-1]):
+    def __init__(self, audiofile, minR400=2.0, mindR7500=1.5, deadfreq=3000, pointsperloop=88200, timerange=[0,-1], triggerrange=[30,-1], mark_space_freqs=[400,800], bitrate=800, bit_inset=1, phase_error=25, use_bandpass=False):
         
         #prevents Run() method from starting before init is finished (value must be changed to 100 at end of __init__)
         self.startthread = 0 
@@ -143,6 +143,24 @@ class AXCTD_Processor:
         self.demod_buffer = np.array([]) #buffer (list) for demodulating PCM data
         self.demodbufferstartind = 0
         self.demod_Npad = 50 #how many points to pad on either side of demodulation window (must be larger than window length for low-pass filter in demodulation function)
+        
+        #demodulator configuration
+        self.f1 = mark_space_freqs[0] # bit 1 (mark) = 400 Hz
+        self.f2 = mark_space_freqs[1] # bit 0 (space) = 800 Hz
+        self.bitrate = bitrate #symbol rate = 800 Hz
+        self.bit_inset = bit_inset #number of points after/before zero crossing where bit identification starts/ends
+        self.phase_error = phase_error
+        N = int(np.round(self.fs/self.bitrate*(1 - self.phase_error/100))) #length of PCM for bit power test
+        self.Npcm = N - 2*self.bit_inset
+        self.trig1 = 2*np.pi*np.arange(0,self.Npcm)/self.fs*self.f1 #trig term for power calculation
+        self.trig2 = 2*np.pi*np.arange(0,self.Npcm)/self.fs*self.f2
+        
+        #filter to be applied to PCM data before demodulation
+        if use_bandpass:
+            self.sos_filter = signal.butter(6, [100,1200], btype='bandpass', fs=self.fs, output='sos') #low pass
+        else:
+            self.sos_filter = signal.butter(6, 1200, btype='lowpass', fs=self.fs, output='sos') #low pass
+    
         
         self.high_bit_scale = 1.5 #scale factor for high frequency bit to correct for higher power at low frequencies (will be adjusted to optimize demodulation after reading first header data)
         
@@ -250,7 +268,7 @@ class AXCTD_Processor:
                         self.status = 2
                 
                 #demodulate to bitstream and append bits to buffer
-                curbits, conf, bit_edges, next_demod_ind = demodulate.demodulate_axctd(self.demod_buffer, self.fs, self.demod_Npad, self.high_bit_scale)
+                curbits, conf, bit_edges, next_demod_ind = demodulate.demodulate_axctd(self.demod_buffer, self.fs, self.demod_Npad, self.sos_filter, self.bitrate, self.f1, self.f2, self.trig1, self.trig2, self.Npcm, self.bit_inset, self.phase_error, self.high_bit_scale)
                 
                 self.binary_buffer.extend(curbits) #buffer for demodulated binary data not organized into frames
                 
