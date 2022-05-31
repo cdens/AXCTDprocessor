@@ -4,6 +4,7 @@
 #   Usage: via command line: -i flag specifies input audio (WAV) file and -o
 #           specifies output text file containing AXCTD profile
 #       e.g. "python3 processAXCTD -i inputaudiofile.wav -o outputASCIIfile.txt"
+#   See README for additional usage instructions
 #
 #   This file is a part of AXCTDprocessor
 #
@@ -33,91 +34,8 @@ import os
 
 import numpy as np
 import matplotlib.pyplot as plt
-import demodulate_simple, demodulate_matchfilter, parseAXCTDframes
+import AXCTDprocessor
 
-
-
-
-###################################################################################
-#                               AXCTD PROCESSING DRIVER                           #
-###################################################################################
-
-#TODO:
-#   o verify data inputs/outputs work for greg's match filter demodulation
-#   o update user inputs + file outputs (add plotting options for profiles)
-#   o clean up logging scheme
-#   o clean code
-#   o test data against UTIG/NASA JPL AXCTD files
-
-
-def processAXCTD(inputfile, outputdir, timerange=[0,-1], settings = ["autodetect",[30,36]]):
-    
-    #reading in audio file
-    pcm, tstart, fs = demodulate_simple.readAXCTDwavfile(inputfile, timerange)
-    
-    #identifying profile tone start from file
-    if settings[0] == "manual":
-        t7500 = settings[1]
-    else:
-        t400, t7500 = demodulateAXCTD.identify_prof_start(pcm, tstart, fs, settings)
-        pcm, tstart = demodulateAXCTD.trim_file_to_prof(pcm, tstart, fs, t400) #trimming PCM data to transmission only
-        
-    #demodulating PCM data: basic version with mark/space frequency power calculations
-    times, bitstream, signallevel = demodulate_simple.demodulate_axctd(pcm, tstart, fs)
-    
-    #demodulating with 
-    times, bitstream, data_db2, active_db2, figs = demodulate_axctd(pcm, fs, timerange, plot=False)
-    
-    #writing test output data to file
-    with open(outputdir + '_demod.txt', 'wt') as f:
-        for t, b, sig in zip(times, bitstream, signallevel):
-            f.write(f"{b},{t:0.6f},{sig:0.3f}\n")
-    
-    #parsing bitstream to CTD profile
-    logging.info("[+] Parsing AXCTD bitstream into frames")
-    T, C, S, z, proftime, profframes, frames = parseAXCTDframes.parse_bitstream_to_profile(bitstream, times, t7500)
-    
-    #writing CTD data to ASCII file
-    outputfile = outputdir + '_profile.txt'
-    logging.info("[+] Writing AXCTD data to " + outputfile)
-    with open(outputfile, "wt") as f:
-        f.write("Depth (m)   Temperature (C)   Conductivity (mS/cm)   Salinity (PSU)\n")
-        for (ct, cc, cs, cz) in zip(T, C, S, z):
-            f.write(f"{cz:9.2f}{ct: 15.2f}{cc: 20.2f}{cs: 17.2f}\n")
-            
-            
-    #plotting
-    tfig = plt.figure()
-    tfig.clear()
-    tax = tfig.add_axes([0.1,0.1,0.85,0.85])
-    sfig = plt.figure()
-    sfig.clear()
-    sax = sfig.add_axes([0.1,0.1,0.85,0.85])
-    tax.plot(T,z,'k',linewidth=2,label='Original',zorder=11)
-    sax.plot(S,z,'k',linewidth=2,label='Original',zorder=11)
-    tax.set_xlabel('Temperature ($^\circ$C)')
-    sax.set_xlabel('Salinity (PSU)')
-    for ax in [tax,sax]:
-        ax.set_ylabel('Depth (m)')
-        # ax.set_title('AXCTD Processor Error Rate Evaluation')
-        # ax.legend()
-        ax.grid()
-        ax.set_ylim([-5,1200])
-        ax.set_yticks([0,100,200,400,600,800,1000,1200])
-        ax.set_yticklabels([0,100,200,400,600,800,1000,1200])
-        ax.invert_yaxis()
-                 
-    tfig.savefig(outputdir + '_AXCTD_Temperature.png',format='png')
-    plt.close('tfig')
-    sfig.savefig(outputdir + '_AXCTD_Salinity.png',format='png')
-    plt.close('sfig')
-        
-    return 0
-
-
-    
-    
-    
     
     
 ###################################################################################
@@ -129,19 +47,20 @@ def processAXCTD(inputfile, outputdir, timerange=[0,-1], settings = ["autodetect
 def main():
     
     parser = argparse.ArgumentParser(description='Demodulate an audio file to text')
-    parser.add_argument('-i', '--input', default='ERROR_NO_FILE_SPECIFIED', help='Input WAV file')
-    parser.add_argument('-o', '--output', default='output/prof', help='Output file prefix')
+    parser.add_argument('-i', '--input', default='ERROR_NO_FILE_SPECIFIED', help='Input WAV filename')
+    parser.add_argument('-o', '--output', default='output.txt', help='Output filename')
     
     parser.add_argument('-s', '--starttime', default='0', help='AXCTD start time in WAV file') #13:43
     parser.add_argument('-e', '--endtime',  default='-1', help='AXCTD end time in WAV file') #20:00
     
-    parser.add_argument('-m', '--mode', default='autodetect', help='Profile transmission detection mode (autodetect, timefrompulse, or manual)')
     parser.add_argument('--autodetect-start',  default='30', help='Point at which autodetect algorithm starts scanning for profile transmission start')
-    parser.add_argument('--autodetect-end',  default='36', help='Point at which autodetect algorithm stops scanning for profile transmission start')
-    parser.add_argument('--signal-threshold',  default='0.5', help='Threshold for normalized signal levels in profile transmission autodetection')
+    parser.add_argument('--autodetect-end',  default='-1', help='Point at which autodetect algorithm stops scanning for profile transmission start')
     
-    parser.add_argument('--header-duration',  default='33', help='Duration between first 400 Hz pulse and profile start')
-    parser.add_argument('-p', '--profile-start', default='33', help='Profile transmission detection mode (autodetect, timefrompulse, or manual)')
+    parser.add_argument('--sig-threshold-400',  default='2', help='Threshold for normalized 400 Hz signal level to detect profile transmission')
+    parser.add_argument('--sig-threshold-7500',  default='1.5', help='Threshold for normalized 7500 Hz signal level to detect profile transmission')
+    parser.add_argument('--dead-freq',  default='3000', help='"Dead" (quiet) frequency used to calculate normalized signal levels (Hz)')
+    parser.add_argument('--pointsperloop',  default='100000', help='Number of PCM audio data points processed per iteration')
+    
     
     parser.add_argument('-v', '--verbose', action='store_true', help='Enable verbose output')
     args = parser.parse_args()
@@ -153,44 +72,34 @@ def main():
     
     #checking for input WAV file
     if args.input == 'ERROR_NO_FILE_SPECIFIED':
-        logging.info("[!] Error- no input WAV file specified! Terminating")
+        print("[!] Error- no input WAV file specified! Terminating")
         exit()
     elif not os.path.exists(args.input):
-        logging.info("[!] Specified input file does not exist! Terminating")
+        print("[!] Specified input file does not exist! Terminating")
         exit()
     
-    #generating output directory
-    outpath = args.output
-    outdir = os.path.dirname(outpath)
-    if not os.path.exists(outdir):
-        os.makedirs(outdir)
     
     #WAV time bounds for processing
     timerange = [parse_times(args.starttime), parse_times(args.endtime)]
     if timerange[0] < 0:
         timerange[0] == 0
-    if timerange[1] < 0:
+    if timerange[1] <= 0:
         timerange[1] = -1
     
-    #settings for profile transmission detection
-    settings = [args.mode]
-    if args.mode == "autodetect":
-        settings.append([float(args.autodetect_start), float(args.autodetect_end)])
-    elif args.mode == "timefrompulse":
-        settings.append(float(header_duration))
-    elif args.mode == "manual":
-        settings.append(parse_times(args.profile_start))
-    else:
-        logging.info(f"[!] Specified profile transmission detector mode {settings[0]} is not a valid option. Please select 'autodetect', 'timefrompulse', 'manual'")
+    #reading settings for profile transmission detection
+    triggerrange = [parse_times(args.autodetect_start), parse_times(args.autodetect_end)]
+    if triggerrange[0] < 0:
+        triggerrange[0] == 0
+    if triggerrange[1] <= 0:
+        triggerrange[1] = -1
     
-    #profile threshold
-    thresh = float(args.signal_threshold)
-    if thresh <= 0 or thresh > 1:
-        logging.info("[!] Specified signal threshold outside the range (0,1], defaulting to 0.5")
-        thresh = 0.5
-    settings.append(thresh)
-
-    return processAXCTD(args.input, outpath, timerange, settings)
+    settings = {'triggerrange': triggerrange,
+                'minR400': float(args.sig_threshold_400),
+                'mindR7500': float(args.sig_threshold_7500),
+                'deadfreq': float(args.dead_freq),
+                'pointsperloop': int(args.pointsperloop)}
+    
+    return processAXCTD(args.input, args.output, timerange, settings)
     
 
     
@@ -212,6 +121,66 @@ def parse_times(time_string):
         logging.info("[!] Unable to interpret specified start time- defaulting to 00:00")
         return -2
 
+        
+        
+        
+def processAXCTD(wavfile,outfile,timerange,settings):
+    
+    minR400 = settings['minR400']
+    mindR7500 = settings['mindR7500']
+    deadfreq = settings['deadfreq']
+    pointsperloop = settings['pointsperloop'] #about 2 sec of data
+    triggerrange = settings['triggerrange']
+        
+    #running AXCTD Processor instance, timing
+    print("Processing profile")
+    ap = AXCTDprocessor.AXCTD_Processor(audiofile=wavfile, minR400=minR400, mindR7500=mindR7500, deadfreq=deadfreq, pointsperloop=pointsperloop, timerange=timerange, triggerrange=triggerrange)
+    ap.run()
+    print("Profile processing complete- writing output files")
+    
+    
+    #saving output file with profile information
+    with open(outfile, 'w') as f:
+        
+        f.write(f"AXCTD profile for {wavfile}\n")
+        
+        #basic file info (fs, file length, trigger times)
+        fs = ap.fs
+        f.write(f'Sampling frequency (fs): {fs} Hz\n')
+        f.write(f'Audio file length: {len(ap.audiostream)/fs} sec\n')
+        f.write(f'400 Hz pulse start: {ap.firstpulse400/fs} sec\n')
+        f.write(f'7500 Hz tone start: {ap.profstartind/fs} sec\n')
+        
+        #header data
+        f.write("\nAXCTD header information:\n")
+        for desc,ckey in zip(['Probe Code', 'Maximum Depth (m)','Probe Serial'],['probe_code','max_depth','serial_no']):
+            f.write(f"{desc}: {ap.metadata[ckey]}\n")
+        f.write("Conversion equations:\n")
+        for coeff,desc in zip(['z','t','c'], ['Depth','Temperature','Conductivity']):
+            if sum(ap.metadata[coeff + 'coeff_valid']) == 4:
+                cfield = coeff + 'coeff'
+                defaultstatus = ''
+            else:
+                cfield = coeff + 'coeff_default'
+                defaultstatus = '(default)'
+            cureqn = ' + '.join([f'{val}*{coeff}^{i}' for i,val in enumerate(ap.metadata[cfield])])
+            f.write(f'{desc}: {cureqn} {defaultstatus}\n')
+        
+        #processor settings
+        f.write('\nProcessor Settings:\n')
+        f.write(f'Time Range: {timerange[0]} sec to {timerange[1] if timerange[1] >= 0 else "N/A"} sec\n')
+        f.write(f'Min. 400 Hz power ratio: {minR400}\n')
+        f.write(f'Min. 7500 Hz power ratio: {mindR7500}\n')
+        f.write(f'Dead frequency: {deadfreq}\n')
+        f.write(f'Points per loop: {pointsperloop}\n')
+        f.write(f'Trigger range: {triggerrange[0]} sec to {triggerrange[1] if triggerrange[1] >= 0 else "N/A"} sec\n')
+        
+        #profile data
+        f.write('\nAXCTD Profile:\n')
+        f.write('Time (s), Hex Frame, Depth (m), Temperature (C), Conductivity (mS/cm), Salinity (PSU)\n')
+        for (t,hf,z,T,C,S) in zip(ap.time, ap.hex_frame, ap.depth, ap.temperature, ap.conductivity, ap.salinity):
+            f.write(f"{t:8.2f},  {hf},{z:10.2f},{T:16.2f},{C:21.2f},{S:15.2f}\n")
+        
         
 
 #MAIN
