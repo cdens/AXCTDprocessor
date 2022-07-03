@@ -125,7 +125,7 @@ def demodulate_axctd(pcm, fs, edge_buffer, sos, bitrate, f1, f2, trig1, trig2, N
 #                           OPTIMIZE DEMOD SCALE FACTOR                           #
 ###################################################################################
 
-def adjust_scale_factor(confs,scale_factor):
+def adjust_scale_factor(confs,scale_factor,advanced_demod):
     
     Npts = len(confs)
     confs = np.asarray(confs)
@@ -156,7 +156,10 @@ def adjust_scale_factor(confs,scale_factor):
     
     
     #calcuating new scale factor
-    scale_factor /= new_threshold
+    if advanced_demod: #confidence is P800-P400, centered around 0
+        scale_factor -= new_threshold
+    else: #confidence is P800/P400, centered around 1
+        scale_factor /= new_threshold 
     
     return scale_factor
 

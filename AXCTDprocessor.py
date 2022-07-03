@@ -17,7 +17,7 @@ from traceback import print_exc as trace_error
 from shutil import copy as shcopy
 from sys import getsizeof
 
-import demodulate, parse
+import demodulate, parse, demodulate_advanced
 
 
 #this could be problematic for debugging but I'm getting tired of the "chunk could not be understood" messages
@@ -66,7 +66,7 @@ def readAXCTDwavfile(inputfile):
 class AXCTD_Processor:
 
     #initializing current thread (saving variables, reading audio data or contacting/configuring receiver)
-    def __init__(self, audiofile, minR400=2.0, mindR7500=1.5, deadfreq=3000, pointsperloop=88200, timerange=[0,-1], triggerrange=[30,-1], mark_space_freqs=[400,800], bitrate=800, bit_inset=1, phase_error=25, use_bandpass=False):
+    def __init__(self, audiofile, minR400=2.0, mindR7500=1.5, deadfreq=3000, pointsperloop=88200, timerange=[0,-1], triggerrange=[30,-1], mark_space_freqs=[400,800], bitrate=800, advanced_demod=False, bit_inset=1, phase_error=25, use_bandpass=False):
         
         #prevents Run() method from starting before init is finished (value must be changed to 100 at end of __init__)
         self.startthread = 0 
@@ -80,6 +80,8 @@ class AXCTD_Processor:
         self.mindR7500 = mindR7500 #threshold to ID profile start by 7.5 kHz tone
         self.deadfreq = deadfreq #frequency to use as "data-less" control to normalize signal levels
         self.pointsperloop = pointsperloop #how many PCM datapoints AXCTDprocessor handles per loop
+        
+        self.advanced_demod = advanced_demod
         
         #index 0: earliest time AXBT will trigger after 400 Hz pulse in seconds (default 30 sec)
         #index 1: time AXCTD will autotrigger without 7.5kHz signal (set to -1 to never trigger profile)
@@ -268,7 +270,10 @@ class AXCTD_Processor:
                         self.status = 2
                 
                 #demodulate to bitstream and append bits to buffer
-                curbits, conf, bit_edges, next_demod_ind = demodulate.demodulate_axctd(self.demod_buffer, self.fs, self.demod_Npad, self.sos_filter, self.bitrate, self.f1, self.f2, self.trig1, self.trig2, self.Npcm, self.bit_inset, self.phase_error, self.high_bit_scale)
+                if self.advanced_demod:
+                    curbits, conf, bit_edges, next_demod_ind = demodulate_advanced.demodulate(self.demod_buffer, self.fs, self.demod_Npad, self.high_bit_scale)
+                else:
+                    curbits, conf, bit_edges, next_demod_ind = demodulate.demodulate_axctd(self.demod_buffer, self.fs, self.demod_Npad, self.sos_filter, self.bitrate, self.f1, self.f2, self.trig1, self.trig2, self.Npcm, self.bit_inset, self.phase_error, self.high_bit_scale)
                 
                 self.binary_buffer.extend(curbits) #buffer for demodulated binary data not organized into frames
                 
@@ -324,7 +329,7 @@ class AXCTD_Processor:
                         
                         #pulling confidence ratios from the header and recalculating optimal high bit scale
                         header_confs = self.binary_buffer_conf[p1startind:p1endind]
-                        self.high_bit_scale = demodulate.adjust_scale_factor(header_confs, self.high_bit_scale)
+                        self.high_bit_scale = demodulate.adjust_scale_factor(header_confs, self.high_bit_scale, self.advanced_demod)
                         self.header1_read = True
                         
                     
@@ -393,7 +398,6 @@ class AXCTD_Processor:
                         if sum(self.metadata['tcoeff_valid']) == 4:
                             self.zcoeff = self.metadata['zcoeff']
                     
-                    
                 if self.status == 2: #parsing bitstream into frames and calculating updated profile data
                     
                     self.past_headers = True
@@ -412,6 +416,43 @@ class AXCTD_Processor:
                     #parsing data into frames
                     hexframes,times,depths,temps,conds,psals,next_buffer_ind = parse.parse_bitstream_to_profile(self.binary_buffer, binbufftimes, self.r7500_buffer, self.tempLUT, self.tcoeff, self.ccoeff, self.zcoeff)
                     
+                    
+                    #identifying and removing spikes
+                    if len(temps) > 0:
+                        
+                        newtimes = []
+                        newdepths = []
+                        newtemps = []
+                        newconds = []
+                        newpsals = []
+                        newhexframes = []
+                        
+                        #median and percentile value based thresholds
+                        thresh = 10
+                        pct_offset = 35
+                        T_median = np.percentile(temps,50)
+                        T_low_diff_thresh = T_median - thresh*(T_median - np.percentile(temps,50-pct_offset))
+                        T_high_diff_thresh = T_median + thresh*(np.percentile(temps,50+pct_offset) - T_median)
+                        S_median = np.percentile(psals,50)
+                        S_low_diff_thresh = S_median - thresh*(S_median - np.percentile(psals,50-pct_offset))
+                        S_high_diff_thresh = S_median + thresh*(np.percentile(psals,50+pct_offset) - S_median)
+                        for (t,z,T,C,S,h) in zip(times,depths,temps,conds,psals,hexframes):
+                            if T < T_low_diff_thresh or T > T_high_diff_thresh or S < S_low_diff_thresh or S > S_high_diff_thresh:
+                                newtimes.append(t)
+                                newdepths.append(z)
+                                newtemps.append(T)
+                                newconds.append(C)
+                                newpsals.append(S)
+                                newhexframes.append(h)
+                                
+                        times = newtimes
+                        depths = newdepths
+                        temps = newtemps
+                        conds = newconds
+                        psals = newpsals
+                        hexframes = newhexframes
+                        
+                    
                     #rounding data and appending to lists
                     self.hex_frame.extend(hexframes)
                     self.time.extend(np.round(times,2))
@@ -424,6 +465,7 @@ class AXCTD_Processor:
                     self.binary_buffer = self.binary_buffer[next_buffer_ind:]
                     self.binary_buffer_inds = self.binary_buffer_inds[next_buffer_ind:]
                     self.r7500_buffer = self.r7500_buffer[next_buffer_ind:]
+                
                                     
             #increment demod buffer index forward, kill process once time exceeds the max time of the audio file
             if self.status > 0: #if active demodulation occuring, increment to start of next bit, corrected for padding
