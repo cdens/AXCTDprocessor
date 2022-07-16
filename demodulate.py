@@ -1,25 +1,21 @@
-#! /usr/bin/env python3
-
-#   Purpose: process data from AXCTD audio files
-#   Usage: via command line: -i flag specifies input audio (WAV) file and -o
-#           specifies output text file containing AXCTD profile
-#       e.g. "python3 processAXCTD -i inputaudiofile.wav -o outputASCIIfile.txt"
+# =============================================================================
+#     Author: Casey R. Densmore, 12FEB2022
 #
-#   This file is a part of AXCTDprocessor
+#    This file is part of the Airborne eXpendable Buoy Processing System (AXBPS)
 #
-#    AXCTDprocessor in this file is free software: you can redistribute it and/or modify
+#    AXBPS is free software: you can redistribute it and/or modify
 #    it under the terms of the GNU General Public License as published by
 #    the Free Software Foundation, either version 3 of the License, or
 #    (at your option) any later version.
 #
-#    AXCTDprocessor is distributed in the hope that it will be useful,
+#    AXBPS is distributed in the hope that it will be useful,
 #    but WITHOUT ANY WARRANTY; without even the implied warranty of
 #    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 #    GNU General Public License for more details.
 #
 #    You should have received a copy of the GNU General Public License
-#    along with AXCTDprocessor.  If not, see <https://www.gnu.org/licenses/>.
-#
+#    along with AXBPS.  If not, see <https://www.gnu.org/licenses/>.
+# =============================================================================
 
 
 ###################################################################################
@@ -40,7 +36,7 @@ from scipy.io import wavfile #for wav file reading
 #                         lagging box smooth filter                               #
 ###################################################################################
 
-def boxsmooth_lag(data,window,startind):
+def boxsmooth_lag(data,window,startind): #filter is lagging for realtime processing
     outdata = data.copy()
     
     for i in range(startind,len(data)):
@@ -95,7 +91,7 @@ def demodulate_axctd(pcm, fs, edge_buffer, sos, bitrate, f1, f2, trig1, trig2, N
         next_options = zerocrossings[c+1:c+5]
         c += 1 + np.argmin(abs(next_options - (zerocrossings[c] + fs/bitrate)))
         bit_edges.append(zerocrossings[c])
-    
+        
     #calculate power at FSK frequencies for each "bit"
     s1 = [] #stores power levels 
     s2 = []
@@ -125,7 +121,7 @@ def demodulate_axctd(pcm, fs, edge_buffer, sos, bitrate, f1, f2, trig1, trig2, N
 #                           OPTIMIZE DEMOD SCALE FACTOR                           #
 ###################################################################################
 
-def adjust_scale_factor(confs,scale_factor,advanced_demod):
+def adjust_scale_factor(confs,scale_factor):
     
     Npts = len(confs)
     confs = np.asarray(confs)
@@ -156,10 +152,7 @@ def adjust_scale_factor(confs,scale_factor,advanced_demod):
     
     
     #calcuating new scale factor
-    if advanced_demod: #confidence is P800-P400, centered around 0
-        scale_factor -= new_threshold
-    else: #confidence is P800/P400, centered around 1
-        scale_factor /= new_threshold 
+    scale_factor /= new_threshold
     
     return scale_factor
 

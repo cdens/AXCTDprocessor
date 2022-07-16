@@ -1,24 +1,21 @@
-#! /usr/bin/env python3
-
-#   Purpose: Process demodulated binary data from AXCTD audio (WAV) files into 32-bit
-#       frames, pull temperature/conductivity data from those frames and calculate the 
-#       corresponding depth and salinity for each observation
+# =============================================================================
+#     Author: Casey R. Densmore, 12FEB2022
 #
-#   This file is a part of AXCTDprocessor
+#    This file is part of the Airborne eXpendable Buoy Processing System (AXBPS)
 #
-#    AXCTDprocessor in this file is free software: you can redistribute it and/or modify
+#    AXBPS is free software: you can redistribute it and/or modify
 #    it under the terms of the GNU General Public License as published by
 #    the Free Software Foundation, either version 3 of the License, or
 #    (at your option) any later version.
 #
-#    AXCTDprocessor is distributed in the hope that it will be useful,
+#    AXBPS is distributed in the hope that it will be useful,
 #    but WITHOUT ANY WARRANTY; without even the implied warranty of
 #    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 #    GNU General Public License for more details.
 #
 #    You should have received a copy of the GNU General Public License
-#    along with AXCTDprocessor.  If not, see <https://www.gnu.org/licenses/>.
-#
+#    along with AXBPS.  If not, see <https://www.gnu.org/licenses/>.
+# =============================================================================
 
 
 ###################################################################################
@@ -27,18 +24,13 @@
 
 import os
 import sys
-import logging
-import argparse
 from collections import namedtuple
 
 
 import numpy as np
 
-try:
-    import gsw
-    USE_GSW = True
-except ImportError:
-    USE_GSW = False
+import gsw
+    
 
 
 ###################################################################################
@@ -46,7 +38,7 @@ except ImportError:
 ###################################################################################
 
 # hexframes,times,depths,temps,conds,psals,next_buffer_ind = parse.parse_bitstream_to_profile(self.binary_buffer, binbufftimes, self.r7500_buffer, self.masks)
-def parse_bitstream_to_profile(bitstream, times, r7500, tempLUT, tcoeff, ccoeff, zcoeff):
+def parse_bitstream_to_profile(bitstream, times, r400_in, r7500_in, tempLUT, tcoeff, ccoeff, zcoeff):
     
     hexframes = [] # hexadecimal representation of frame
     proftime = [] #time (post-profile start) corresponding to each ob
@@ -54,6 +46,8 @@ def parse_bitstream_to_profile(bitstream, times, r7500, tempLUT, tcoeff, ccoeff,
     T = [] #temperature
     C = [] #conductivity
     S = [] #salinity
+    r400 = []
+    r7500 = []
     
     #initializing fields for loop
     s = 0 #starting bit
@@ -71,7 +65,7 @@ def parse_bitstream_to_profile(bitstream, times, r7500, tempLUT, tcoeff, ccoeff,
         frame = bitstream[s:s+32]
         
         #verifying that frame meets requirements, otherwise increasing start bit and rechecking
-        if frame[0:2] != [1, 0] or not check_crc(frame) or not r7500[s] > 0:
+        if frame[0:2] != [1, 0] or not check_crc(frame) or not r7500_in[s] > 0:
             s += 1
             
         else: #good profile point
@@ -89,10 +83,13 @@ def parse_bitstream_to_profile(bitstream, times, r7500, tempLUT, tcoeff, ccoeff,
             C.append(cC)
             S.append(cS)
             
+            r400.append(r400_in[s])
+            r7500.append(r7500_in[s])
+            
             s += 32 #increase start bit by 32 to search for next frame
 
     # End parse bitstream
-    return hexframes, proftime, z, T, C, S, s
+    return hexframes, proftime, z, T, C, S, r400, r7500, s
     
 
     
@@ -102,15 +99,6 @@ def parse_bitstream_to_profile(bitstream, times, r7500, tempLUT, tcoeff, ccoeff,
 ###################################################################################
 #          FRAME CONVERSION TO TEMPERATURE/CONDUCTIVITY/SALINITY/DEPTH            #
 ###################################################################################
-
-#conversion: coefficients=C,  D_out = C[0] + C[1]*D_in + C[2]*D_in^2 + C[3]*D_in^3 + ...
-def dataconvert(data_in,coefficients):
-    output = 0
-    for (i,c) in enumerate(coefficients):
-        output += c*data_in**i
-    return output
-    
-    
 
 def convertFrameToInt(frame):
     """ Convert a frame to integer fields
@@ -141,11 +129,8 @@ def convertIntsToFloats(Tint, Cint, time, tempLUT, tcoeff, ccoeff, zcoeff):
     C = dataconvert(Cuncal, ccoeff)
     
     #salinity from temperature/conductivity/depth
-    if USE_GSW:
-        S = gsw.SP_from_C(C,T,z) #assumes pressure (mbar) approx. equals depth (m)
-    else:
-        S = float('nan')
-    
+    S = gsw.SP_from_C(C,T,z) #assumes pressure (mbar) approx. equals depth (m)
+        
     return T, C, S, z
         
         
@@ -202,7 +187,7 @@ def trim_header(bits_in):
 def initialize_axctd_metadata():
     
     #dict containing metadata (conversions, other header info) for the AXCTD
-    axctd_metadata = {'tcoeff': [0,1,0,0], 'ccoeff': [0,1,0,0], 'zcoeff': [1,1,1,1], 'serial_no':None, 'probe_code':None, 'max_depth':None, 'misc':None, 'tcoeff_hex':['','','',''], 'ccoeff_hex':['','','',''], 'zcoeff_hex':['','','',''], 'tcoeff_valid':[False] * 4, 'ccoeff_valid':[False] * 4, 'zcoeff_valid':[False] * 4, 'tcoeff_default':[-0.053328, 0.994372, 0.0, 0.0], 'ccoeff_default':[-0.0622192, 1.04584, 0.0, 0.0], 'zcoeff_default':[0.72, 2.761235, -0.0002380066, 0.0]}
+    axctd_metadata = {'tcoeff': [0,1,0,0], 'ccoeff': [0,1,0,0], 'zcoeff': [1,1,1,1], 'serial_no':None, 'probe_code':None, 'max_depth':None, 'misc':None, 'tcoeff_hex':['','','',''], 'ccoeff_hex':['','','',''], 'zcoeff_hex':['','','',''], 'tcoeff_valid':[False] * 4, 'ccoeff_valid':[False] * 4, 'zcoeff_valid':[False] * 4}
     
     return axctd_metadata
     
@@ -305,6 +290,20 @@ def parse_header(bits):
 
 
 ###################################################################################
+#                   GENERAL LIST FORMAT DATA CONVERSION                           #
+###################################################################################
+    
+#conversion: coefficients=C,  D_out = C[0] + C[1]*D_in + C[2]*D_in^2 + C[3]*D_in^3 + ...
+def dataconvert(data_in,coefficients):
+    output = 0
+    for (i,c) in enumerate(coefficients):
+        output += c*data_in**i
+    return output
+    
+    
+
+
+###################################################################################
 #                   CYCLIC REDUNCANCY CHECK FOR FRAME                             #
 ###################################################################################
 
@@ -370,12 +369,12 @@ def binListToHex(binary):
     hex_str = ''
     for s,e in zip(prof_starts, prof_ends):
         cbinnum = binListToInt(binary[s:e])
-        if cbinnum <= 9:
+        if cbinnum <= 9: #convert decimal integer to hex digit
             cstr = str(cbinnum)
         else:
             cstr = letters[cbinnum-10]
             
-        hex_str = hex_str + cstr
+        hex_str += cstr #append current hex digit to hex string
         
     return hex_str
     

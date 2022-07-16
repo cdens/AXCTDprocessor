@@ -135,7 +135,7 @@ def processAXCTD(wavfile,outfile,timerange,settings):
         
     #running AXCTD Processor instance, timing
     print("Processing profile")
-    ap = AXCTDprocessor.AXCTD_Processor(audiofile=wavfile, minR400=minR400, mindR7500=mindR7500, deadfreq=deadfreq, pointsperloop=pointsperloop, timerange=timerange, triggerrange=triggerrange)
+    ap = AXCTDprocessor.AXCTD_Processor(wavfile, timerange=timerange, user_settings=settings)
     ap.run()
     print("Profile processing complete- writing output files")
     
@@ -146,9 +146,9 @@ def processAXCTD(wavfile,outfile,timerange,settings):
         f.write(f"AXCTD profile for {wavfile}\n")
         
         #basic file info (fs, file length, trigger times)
-        fs = ap.fs
+        fs = ap.f_s
         f.write(f'Sampling frequency (fs): {fs} Hz\n')
-        f.write(f'Audio file length: {len(ap.audiostream)/fs} sec\n')
+        f.write(f'Audio file length: {ap.numpoints/fs} sec\n')
         f.write(f'400 Hz pulse start: {ap.firstpulse400/fs} sec\n')
         f.write(f'7500 Hz tone start: {ap.profstartind/fs} sec\n')
         
@@ -179,7 +179,7 @@ def processAXCTD(wavfile,outfile,timerange,settings):
         #profile data
         f.write('\nAXCTD Profile:\n')
         f.write('Time (s), Hex Frame, Depth (m), Temperature (C), Conductivity (mS/cm), Salinity (PSU)\n')
-        for (t,hf,z,T,C,S) in zip(ap.time, ap.hex_frame, ap.depth, ap.temperature, ap.conductivity, ap.salinity):
+        for (t,hf,z,T,C,S) in zip(ap.time, ap.hexframes, ap.depth, ap.temperature, ap.conductivity, ap.salinity):
             f.write(f"{t:8.2f},  {hf},{z:10.2f},{T:16.2f},{C:21.2f},{S:15.2f}\n")
         
         
